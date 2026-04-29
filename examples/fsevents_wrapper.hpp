@@ -21,8 +21,8 @@
 #include <dispatch/dispatch.h>
 
 #include "exec/libdispatch_queue.hpp"
+#include "exec/on_scheduler.hpp"
 #include "exec/sequence_senders.hpp"
-#include "on_scheduler.hpp"
 #include "stdexec/execution.hpp"
 
 #include <atomic>
@@ -429,8 +429,8 @@ namespace fsx
       watch_options     __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires examples_detail::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
-                                                      exec::libdispatch_scheduler>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+                                           exec::libdispatch_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
@@ -440,7 +440,7 @@ namespace fsx
   }  // namespace __detail
 
   // See examples/sequence_sender_on_scheduler.md.
-  inline constexpr examples_detail::__on_scheduler_t on_queue{};
+  inline constexpr exec::__on_scheduler_t on_queue{};
 
   inline auto fsevents_context::watch(watch_options __opts) -> __detail::__watch_sender
   {

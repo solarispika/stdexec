@@ -65,9 +65,10 @@ wrapper.
 Same reason as FSEvents: `stdexec::starts_on` (and `stdexec::write_env`)
 collapse sequence-sender attributes today, so downstream
 `transform_each` loses the per-event type. `dax::on_queue` is a thin
-adapter around the shared `examples_detail::__on_scheduler_t` (also
-used by `fsx::on_queue` and `rdcx::pool::on_pool`) that performs the
-env injection while preserving sequence-sender semantics. See
+adapter around the shared `exec::__on_scheduler_t` (defined in
+`include/exec/on_scheduler.hpp` and also used by `fsx::on_queue` and
+`rdcx::pool::on_pool`) that performs the env injection while
+preserving sequence-sender semantics. See
 `sequence_sender_on_scheduler.md` for the full explanation.
 
 ### Internal serial queue

@@ -41,7 +41,7 @@ namespace
   // and is the wall against silently routing DA callbacks onto an unrelated
   // scheduler (e.g. static_thread_pool) when a user composes via starts_on.
   static_assert(
-    !examples_detail::__env_has_scheduler<stdexec::env<>, exec::libdispatch_scheduler>);
+    !exec::__env_has_scheduler<stdexec::env<>, exec::libdispatch_scheduler>);
 
   TEST_CASE("dax::da_context watch can be cancelled before any DA event")
   {

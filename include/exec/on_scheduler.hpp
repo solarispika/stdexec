@@ -17,29 +17,32 @@
 
 // Shared sequence-sender-aware env-injection adapter.
 //
-// Used by examples/fsevents_wrapper.hpp (`fsx::on_queue`) and
-// examples/rdc_pool_wrapper.hpp (`rdcx::pool::on_pool`) to expose a
-// scheduler via `get_scheduler` in the receiver env without losing
-// sequence-sender semantics on the wrapped sender. See
+// Used by example wrappers that need to expose a scheduler via
+// `get_scheduler` in the receiver env without losing sequence-sender
+// semantics on the wrapped sender. See
 // examples/sequence_sender_on_scheduler.md for the full explanation,
 // and docs/plans/2026-04-29-stdexec-write_env-sequence-sender-issue.md
 // for the upstream issue this works around.
 //
+// The adapter is scheduler-agnostic — it accepts any
+// `stdexec::scheduler` and is shared by libdispatch-based wrappers
+// (FSEvents, DiskArbitration) and non-libdispatch wrappers (RDC pool).
+//
 // Each wrapper defines its own thin CPO instance:
 //
 //   namespace fsx {
-//     inline constexpr examples_detail::__on_scheduler_t on_queue{};
+//     inline constexpr exec::__on_scheduler_t on_queue{};
 //   }
 //   namespace rdcx::pool {
-//     inline constexpr examples_detail::__on_scheduler_t on_pool{};
+//     inline constexpr exec::__on_scheduler_t on_pool{};
 //   }
 
-#include "exec/sequence_senders.hpp"
-#include "stdexec/execution.hpp"
+#include "../stdexec/execution.hpp"
+#include "sequence_senders.hpp"
 
 #include <utility>
 
-namespace examples_detail
+namespace experimental::execution
 {
   template <class _Sched>
   struct __sched_prop
@@ -71,9 +74,9 @@ namespace examples_detail
     }
 
     template <class _Item>
-    auto set_next(_Item&& __item) -> exec::next_sender_of_t<_Rcvr, _Item>
+    auto set_next(_Item&& __item) -> next_sender_of_t<_Rcvr, _Item>
     {
-      return exec::set_next(__rcvr_, static_cast<_Item&&>(__item));
+      return experimental::execution::set_next(__rcvr_, static_cast<_Item&&>(__item));
     }
 
     void set_value() noexcept
@@ -96,8 +99,8 @@ namespace examples_detail
   template <class _Snd, class _Sched>
   struct __on_scheduler_sender
   {
-    using sender_concept        = exec::sequence_sender_tag;
-    using item_types            = exec::__item_types_of_t<_Snd>;
+    using sender_concept        = sequence_sender_tag;
+    using item_types            = __item_types_of_t<_Snd>;
     using completion_signatures = stdexec::__completion_signatures_of_t<_Snd>;
 
     _Snd   __snd_;
@@ -105,11 +108,11 @@ namespace examples_detail
 
     template <stdexec::receiver _Rcvr>
     auto subscribe(_Rcvr __rcvr) &&
-      -> exec::subscribe_result_t<_Snd, __on_scheduler_rcvr<_Rcvr, _Sched>>
+      -> subscribe_result_t<_Snd, __on_scheduler_rcvr<_Rcvr, _Sched>>
     {
-      return exec::subscribe(static_cast<_Snd&&>(__snd_),
-                             __on_scheduler_rcvr<_Rcvr, _Sched>{std::move(__rcvr),
-                                                                std::move(__sched_)});
+      return experimental::execution::subscribe(
+        static_cast<_Snd&&>(__snd_),
+        __on_scheduler_rcvr<_Rcvr, _Sched>{std::move(__rcvr), std::move(__sched_)});
     }
   };
 
@@ -128,4 +131,6 @@ namespace examples_detail
   concept __env_has_scheduler =
     stdexec::__callable<stdexec::get_scheduler_t, _Env const&>
     && std::same_as<stdexec::__call_result_t<stdexec::get_scheduler_t, _Env const&>, _Sched>;
-}  // namespace examples_detail
+}  // namespace experimental::execution
+
+namespace exec = experimental::execution;

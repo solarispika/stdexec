@@ -40,9 +40,9 @@
 // windows.h must come first
 #include <threadpoolapiset.h>
 
+#include "exec/on_scheduler.hpp"
 #include "exec/sequence_senders.hpp"
 #include "exec/windows/windows_thread_pool.hpp"
-#include "on_scheduler.hpp"
 #include "stdexec/execution.hpp"
 
 #include <atomic>
@@ -578,8 +578,8 @@ namespace rdcx::pool
       watch_options __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires examples_detail::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
-                                                      exec::windows_thread_pool::scheduler>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+                                           exec::windows_thread_pool::scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
@@ -594,5 +594,5 @@ namespace rdcx::pool
   }
 
   // See examples/sequence_sender_on_scheduler.md.
-  inline constexpr examples_detail::__on_scheduler_t on_pool{};
+  inline constexpr exec::__on_scheduler_t on_pool{};
 }  // namespace rdcx::pool

@@ -100,8 +100,6 @@ if(STDEXEC_ENABLE_LIBDISPATCH)
             CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON
             CXX_EXTENSIONS OFF)
-        target_include_directories(test.da_wrapper
-            PRIVATE ${CMAKE_SOURCE_DIR}/examples)
         target_link_libraries(test.da_wrapper
             PRIVATE
             STDEXEC::stdexec

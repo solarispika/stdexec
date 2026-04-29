@@ -22,11 +22,11 @@ ready-to-use disk event stream.
    `libdispatch_scheduler` queue. Wrapper never hands the user's queue
    to `DASessionSetDispatchQueue` directly.
 2. `__watch_sender::subscribe` requires `libdispatch_scheduler` in the
-   receiver env via `examples_detail::__env_has_scheduler`. Compile-time
-   error otherwise — no silent fallback.
-3. `dax::on_queue` reuses `examples_detail::__on_scheduler_t` (the
-   shared env-injection adapter that preserves sequence-sender
-   semantics).
+   receiver env via `exec::__env_has_scheduler`. Compile-time error
+   otherwise — no silent fallback.
+3. `dax::on_queue` reuses `exec::__on_scheduler_t` (the shared
+   env-injection adapter in `include/exec/on_scheduler.hpp` that
+   preserves sequence-sender semantics).
 4. Single in-flight callback + serial queue + `binary_semaphore`
    backpressure. DA delivers callbacks serialized on the assigned
    dispatch queue, so the same FSEvents idiom works.
@@ -122,7 +122,7 @@ namespace dax {
     std::atomic<__detail::__op_base*> __active_{nullptr};  // single-active CAS
   };
 
-  inline constexpr examples_detail::__on_scheduler_t on_queue{};
+  inline constexpr exec::__on_scheduler_t on_queue{};
 }
 ```
 
