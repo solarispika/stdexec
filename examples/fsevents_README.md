@@ -62,14 +62,13 @@ to a default queue when the caller intended e.g. a `static_thread_pool`.
 
 ### Why `fsx::on_queue` instead of `stdexec::starts_on`?
 
-`stdexec::starts_on(sched, child)` rewrites the child via the
-regular-sender path (`__sequence(continues_on(just(), sched), child)`),
-which strips `item_types` and other sequence-sender attributes —
-`transform_each` downstream then sees a regular sender and the per-batch
-type is lost. `fsx::on_queue` is a small (~80 LoC) sequence-sender-aware
-adapter that wraps the receiver to expose `get_scheduler ->
-libdispatch_scheduler` in its env without losing sequence-sender
-semantics. See `examples/fsevents_wrapper.hpp` for the implementation.
+Short version: `stdexec::starts_on` (and `stdexec::write_env`) collapse
+sequence-sender attributes today, so downstream `transform_each` loses
+the per-batch type. `fsx::on_queue` is a small adapter that does just
+the env injection while preserving sequence-sender semantics. See
+[`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
+for the full explanation; the same pattern is used by
+`rdcx::pool::on_pool` on the Windows side.
 
 ### Internal serial queue
 

@@ -80,15 +80,13 @@ a `static_thread_pool`.
 
 ### Why `rdcx::pool::on_pool` instead of `stdexec::starts_on`?
 
-Same reason as `fsx::on_queue` on the libdispatch side:
-`stdexec::starts_on(sched, child)` rewrites the child via the
-regular-sender path (`__sequence(continues_on(just(), sched), child)`)
-which strips `item_types` and other sequence-sender attributes. The
-adapter (~80 LoC, in `rdc_pool_wrapper.hpp`) wraps the receiver to expose
-`get_scheduler -> windows_thread_pool::scheduler` in its env without
-losing sequence-sender semantics. Tracked upstream in
-`docs/plans/2026-04-29-stdexec-write_env-sequence-sender-issue.md`; once
-fixed, `on_pool` collapses to plain `stdexec::write_env`.
+Short version: `stdexec::starts_on` (and `stdexec::write_env`) collapse
+sequence-sender attributes today, so downstream `transform_each` loses
+the per-batch type. `rdcx::pool::on_pool` is a small adapter that does
+just the env injection while preserving sequence-sender semantics. See
+[`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
+for the full explanation; the same pattern is used by `fsx::on_queue`
+on the macOS side.
 
 ### How `__op` binds to the user's pool
 
