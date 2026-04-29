@@ -82,6 +82,13 @@ if (APPLE)
               "-framework CoreServices")
 endif ()
 
+if (WIN32)
+  add_executable(example.rdc rdc.cpp)
+  target_link_libraries(example.rdc
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags)
+endif ()
+
 foreach(example ${stdexec_examples})
   def_example(${example})
 endforeach()
