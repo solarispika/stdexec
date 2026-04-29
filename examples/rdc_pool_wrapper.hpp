@@ -41,6 +41,7 @@
 #include <threadpoolapiset.h>
 
 #include "exec/sequence_senders.hpp"
+#include "exec/windows/windows_thread_pool.hpp"
 #include "stdexec/execution.hpp"
 
 #include <atomic>
@@ -167,6 +168,7 @@ namespace rdcx::pool
       rdc_context*                     __ctx_;
       watch_options                    __opts_;
       _Rcvr                            __rcvr_;
+      TP_CALLBACK_ENVIRON              __env_;
       HANDLE                           __dir_{INVALID_HANDLE_VALUE};
       PTP_IO                           __io_{nullptr};
       PTP_WORK                         __cleanup_work_{nullptr};
@@ -184,7 +186,16 @@ namespace rdcx::pool
         : __ctx_{__c}
         , __opts_{__o}
         , __rcvr_{std::move(__r)}
-      {}
+      {
+        // Bind callback environment to the user-supplied pool. The receiver
+        // env is required (by subscribe's `requires` clause) to expose a
+        // windows_thread_pool::scheduler via get_scheduler; nullptr from
+        // native_handle() is the documented sentinel for "use process
+        // default pool", which SetThreadpoolCallbackPool already accepts.
+        InitializeThreadpoolEnvironment(&__env_);
+        auto __sch = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
+        SetThreadpoolCallbackPool(&__env_, __sch.native_handle());
+      }
 
       ~__op() override
       {
@@ -204,6 +215,7 @@ namespace rdcx::pool
         {
           CloseHandle(__dir_);
         }
+        DestroyThreadpoolEnvironment(&__env_);
       }
 
       void start() & noexcept
@@ -236,7 +248,7 @@ namespace rdcx::pool
           return;
         }
 
-        __io_ = CreateThreadpoolIo(__dir_, &__io_callback, this, nullptr);
+        __io_ = CreateThreadpoolIo(__dir_, &__io_callback, this, &__env_);
         if (!__io_)
         {
           DWORD __e = GetLastError();
@@ -251,7 +263,7 @@ namespace rdcx::pool
           return;
         }
 
-        __cleanup_work_ = CreateThreadpoolWork(&__cleanup_callback, this, nullptr);
+        __cleanup_work_ = CreateThreadpoolWork(&__cleanup_callback, this, &__env_);
         if (!__cleanup_work_)
         {
           DWORD __e = GetLastError();
@@ -568,9 +580,101 @@ namespace rdcx::pool
       watch_options __opts_;
 
       template <stdexec::receiver _Rcvr>
+        requires stdexec::__callable<stdexec::get_scheduler_t,
+                                     stdexec::env_of_t<_Rcvr> const&>
+              && std::same_as<
+                   stdexec::__call_result_t<stdexec::get_scheduler_t,
+                                            stdexec::env_of_t<_Rcvr> const&>,
+                   exec::windows_thread_pool::scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+      }
+    };
+
+    // ------------------------------------------------------------------
+    // on_pool: env-injection adapter that exposes a scheduler via
+    // get_scheduler in the receiver env. Same shape (and same workaround
+    // motivation) as fsx::on_queue — stdexec::starts_on rewrites a
+    // sequence_sender child via the regular-sender path
+    // (__sequence(continues_on(just(), sched), child)) and loses
+    // item_types, so we cannot compose ctx.watch() with `starts_on`.
+    // ------------------------------------------------------------------
+    template <class _Sched>
+    struct __sched_prop
+    {
+      _Sched __sched_;
+
+      [[nodiscard]]
+      constexpr auto query(stdexec::get_scheduler_t) const noexcept -> _Sched
+      {
+        return __sched_;
+      }
+    };
+
+    template <class _Rcvr, class _Sched>
+    struct __on_pool_rcvr
+    {
+      using receiver_concept = stdexec::receiver_tag;
+
+      _Rcvr  __rcvr_;
+      _Sched __sched_;
+
+      [[nodiscard]]
+      auto get_env() const noexcept
+      {
+        return stdexec::env{__sched_prop<_Sched>{__sched_}, stdexec::get_env(__rcvr_)};
+      }
+
+      template <class _Item>
+      auto set_next(_Item&& __item) -> exec::next_sender_of_t<_Rcvr, _Item>
+      {
+        return exec::set_next(__rcvr_, static_cast<_Item&&>(__item));
+      }
+
+      void set_value() noexcept
+      {
+        stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_));
+      }
+
+      void set_stopped() noexcept
+      {
+        stdexec::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
+      }
+
+      template <class _E>
+      void set_error(_E&& __e) noexcept
+      {
+        stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), static_cast<_E&&>(__e));
+      }
+    };
+
+    template <class _Snd, class _Sched>
+    struct __on_pool_sender
+    {
+      using sender_concept        = exec::sequence_sender_tag;
+      using item_types            = exec::__item_types_of_t<_Snd>;
+      using completion_signatures = stdexec::__completion_signatures_of_t<_Snd>;
+
+      _Snd   __snd_;
+      _Sched __sched_;
+
+      template <stdexec::receiver _Rcvr>
+      auto
+      subscribe(_Rcvr __rcvr) && -> exec::subscribe_result_t<_Snd, __on_pool_rcvr<_Rcvr, _Sched>>
+      {
+        return exec::subscribe(static_cast<_Snd&&>(__snd_),
+                               __on_pool_rcvr<_Rcvr, _Sched>{std::move(__rcvr),
+                                                             std::move(__sched_)});
+      }
+    };
+
+    struct __on_pool_t
+    {
+      template <stdexec::scheduler _Sched, class _Snd>
+      auto operator()(_Sched __sched, _Snd __snd) const -> __on_pool_sender<_Snd, _Sched>
+      {
+        return {std::move(__snd), std::move(__sched)};
       }
     };
   }  // namespace __detail
@@ -579,4 +683,6 @@ namespace rdcx::pool
   {
     return {this, __opts};
   }
+
+  inline constexpr __detail::__on_pool_t on_pool{};
 }  // namespace rdcx::pool

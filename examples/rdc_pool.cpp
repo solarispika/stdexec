@@ -23,6 +23,7 @@
 #include "exec/sequence/transform_each.hpp"
 #include "exec/static_thread_pool.hpp"
 #include "exec/when_any.hpp"
+#include "exec/windows/windows_thread_pool.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -73,12 +74,18 @@ auto main() -> int
     }
   }};
 
-  exec::static_thread_pool __pool{1};
-  auto                     __sched = __pool.get_scheduler();
+  // The IO completions for ctx.watch() run on this pool. on_pool injects
+  // the scheduler into the receiver env so subscribe()'s requires-clause
+  // is satisfied; we cannot use stdexec::starts_on for this because it
+  // does not preserve sequence_sender semantics for its child.
+  exec::windows_thread_pool __wtp{2, 4};
+
+  exec::static_thread_pool __timer_pool{1};
+  auto                     __timer_sched = __timer_pool.get_scheduler();
   stdexec::sync_wait(exec::when_any(
-    stdexec::starts_on(__sched, stdexec::just())
+    stdexec::starts_on(__timer_sched, stdexec::just())
       | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-    __ctx.watch()
+    rdcx::pool::on_pool(__wtp.get_scheduler(), __ctx.watch())
       | exec::transform_each(stdexec::then([&](rdcx::pool::fs_batch __b) {
           if (__b.overflow)
           {
