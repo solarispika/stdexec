@@ -42,6 +42,7 @@
 
 #include "exec/sequence_senders.hpp"
 #include "exec/windows/windows_thread_pool.hpp"
+#include "on_scheduler.hpp"
 #include "stdexec/execution.hpp"
 
 #include <atomic>
@@ -592,91 +593,6 @@ namespace rdcx::pool
       }
     };
 
-    // ------------------------------------------------------------------
-    // on_pool: env-injection adapter that exposes a scheduler via
-    // get_scheduler in the receiver env. Same shape (and same workaround
-    // motivation) as fsx::on_queue — stdexec::starts_on rewrites a
-    // sequence_sender child via the regular-sender path
-    // (__sequence(continues_on(just(), sched), child)) and loses
-    // item_types, so we cannot compose ctx.watch() with `starts_on`.
-    // ------------------------------------------------------------------
-    template <class _Sched>
-    struct __sched_prop
-    {
-      _Sched __sched_;
-
-      [[nodiscard]]
-      constexpr auto query(stdexec::get_scheduler_t) const noexcept -> _Sched
-      {
-        return __sched_;
-      }
-    };
-
-    template <class _Rcvr, class _Sched>
-    struct __on_pool_rcvr
-    {
-      using receiver_concept = stdexec::receiver_tag;
-
-      _Rcvr  __rcvr_;
-      _Sched __sched_;
-
-      [[nodiscard]]
-      auto get_env() const noexcept
-      {
-        return stdexec::env{__sched_prop<_Sched>{__sched_}, stdexec::get_env(__rcvr_)};
-      }
-
-      template <class _Item>
-      auto set_next(_Item&& __item) -> exec::next_sender_of_t<_Rcvr, _Item>
-      {
-        return exec::set_next(__rcvr_, static_cast<_Item&&>(__item));
-      }
-
-      void set_value() noexcept
-      {
-        stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_));
-      }
-
-      void set_stopped() noexcept
-      {
-        stdexec::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
-      }
-
-      template <class _E>
-      void set_error(_E&& __e) noexcept
-      {
-        stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), static_cast<_E&&>(__e));
-      }
-    };
-
-    template <class _Snd, class _Sched>
-    struct __on_pool_sender
-    {
-      using sender_concept        = exec::sequence_sender_tag;
-      using item_types            = exec::__item_types_of_t<_Snd>;
-      using completion_signatures = stdexec::__completion_signatures_of_t<_Snd>;
-
-      _Snd   __snd_;
-      _Sched __sched_;
-
-      template <stdexec::receiver _Rcvr>
-      auto
-      subscribe(_Rcvr __rcvr) && -> exec::subscribe_result_t<_Snd, __on_pool_rcvr<_Rcvr, _Sched>>
-      {
-        return exec::subscribe(static_cast<_Snd&&>(__snd_),
-                               __on_pool_rcvr<_Rcvr, _Sched>{std::move(__rcvr),
-                                                             std::move(__sched_)});
-      }
-    };
-
-    struct __on_pool_t
-    {
-      template <stdexec::scheduler _Sched, class _Snd>
-      auto operator()(_Sched __sched, _Snd __snd) const -> __on_pool_sender<_Snd, _Sched>
-      {
-        return {std::move(__snd), std::move(__sched)};
-      }
-    };
   }  // namespace __detail
 
   inline auto rdc_context::watch(watch_options __opts) -> __detail::__watch_sender
@@ -684,5 +600,8 @@ namespace rdcx::pool
     return {this, __opts};
   }
 
-  inline constexpr __detail::__on_pool_t on_pool{};
+  // env-injection adapter exposing a windows_thread_pool::scheduler via
+  // get_scheduler in the receiver env. See examples/on_scheduler.hpp
+  // and examples/sequence_sender_on_scheduler.md.
+  inline constexpr examples_detail::__on_scheduler_t on_pool{};
 }  // namespace rdcx::pool
