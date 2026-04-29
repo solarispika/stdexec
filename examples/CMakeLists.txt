@@ -68,6 +68,20 @@ if (LINUX)
   )
 endif ()
 
+if (APPLE)
+  add_executable(example.fsevents fsevents.cpp)
+  target_link_libraries(example.fsevents
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              "-framework CoreServices")
+
+  add_executable(example.fsevents_coro fsevents_coro.cpp)
+  target_link_libraries(example.fsevents_coro
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              "-framework CoreServices")
+endif ()
+
 foreach(example ${stdexec_examples})
   def_example(${example})
 endforeach()
