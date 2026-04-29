@@ -65,6 +65,7 @@ endif ()
 if (LINUX)
   set(stdexec_examples ${stdexec_examples}
                     "example.io_uring : io_uring.cpp"
+                    "example.inotify : inotify.cpp"
   )
 endif ()
 
