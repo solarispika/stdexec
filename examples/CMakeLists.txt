@@ -80,6 +80,13 @@ if (APPLE)
       PRIVATE STDEXEC::stdexec
               stdexec_executable_flags
               "-framework CoreServices")
+
+  add_executable(example.da da.cpp)
+  target_link_libraries(example.da
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              "-framework DiskArbitration"
+              "-framework CoreFoundation")
 endif ()
 
 if (WIN32)
