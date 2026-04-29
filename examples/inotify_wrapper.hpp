@@ -192,7 +192,11 @@ namespace inx
       watch_options                  __opts_;
       _Rcvr                          __rcvr_;
       experimental::execution::__io_uring::__context*  __ring_;
-      std::vector<std::byte>         __buffer_;
+      // uint64_t (alignment 8) guarantees the >=4-byte alignment that
+      // ::inotify_event requires for its int wd / uint32_t fields.
+      // std::vector<std::byte>::data() is only aligned to alignof(byte)==1
+      // by the standard. Same trick as rdc_pool_wrapper.hpp's vector<DWORD>.
+      std::vector<std::uint64_t>     __buffer_;
       std::vector<fs_event>          __staging_;
       std::optional<__read_op_t>     __read_op_;
       std::unique_ptr<__next_op_t>   __next_op_;
@@ -206,7 +210,9 @@ namespace inx
       {
         auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
         __ring_      = __sched.__context_;
-        __buffer_.resize(__opts_.buffer_size);
+        // Round buffer_size up to the next uint64_t.
+        __buffer_.resize((__opts_.buffer_size + sizeof(std::uint64_t) - 1)
+                         / sizeof(std::uint64_t));
       }
 
       void start() & noexcept
@@ -228,13 +234,20 @@ namespace inx
         // has already had its complete() returned. Destructing the previous
         // here is safe because we are not nested in its callback (we are
         // either in start() or in next_receiver::set_value).
+        // Note: __io_task_facade has two ctor overloads; overload (B) takes
+        // _Args... matching _Base's own ctor, overload (A) takes
+        // (__task* parent, _Args...). __read_task is an aggregate with no
+        // leading __task* field, so overload (B) wins and __base_ is
+        // copy/move-constructed from our brace-init. If a future change
+        // adds a leading __task* member to __read_task it would silently
+        // flip overload selection — keep the leading member as __op_base*.
         __read_op_.emplace(std::in_place,
                            __read_task{
                              static_cast<__op_base*>(this),
                              __ring_,
                              __ctx_->__fd_,
                              __buffer_.data(),
-                             __buffer_.size()});
+                             __buffer_.size() * sizeof(std::uint64_t)});
         __read_op_->start();
       }
 
@@ -287,11 +300,12 @@ namespace inx
       void __parse_into_staging(std::size_t __bytes) noexcept
       {
         __staging_.clear();
+        const auto* __raw = reinterpret_cast<const std::byte*>(__buffer_.data());
         std::size_t __off = 0;
         while (__off + sizeof(::inotify_event) <= __bytes)
         {
           const auto* __ev = reinterpret_cast<const ::inotify_event*>(
-            __buffer_.data() + __off);
+            __raw + __off);
           std::size_t __record = sizeof(::inotify_event) + __ev->len;
           if (__off + __record > __bytes) break;
 
@@ -340,6 +354,14 @@ namespace inx
 
       void __teardown() noexcept
       {
+        // Today __teardown() is only reachable from __on_read_complete()'s
+        // chain (via __finish_stopped / __finish_error), so the in-flight
+        // read CQE has already been delivered and __read_op_ has no SQE
+        // left in the ring. Destroying it inline is safe.
+        // Task 3 (cancellation) adds a stop-callback path that can call
+        // __teardown from a different thread while a SQE is in flight —
+        // that path will need to schedule cleanup after the cancel CQE
+        // arrives, not run __read_op_.reset() inline.
         __next_op_.reset();
         __read_op_.reset();
         __ctx_->__active_.store(nullptr, std::memory_order_release);
