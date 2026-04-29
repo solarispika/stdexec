@@ -139,7 +139,7 @@ FSEvents.
 | **`bsd_name` may be empty** | `DADiskGetBSDName` returns `NULL` for non-BSD disks (some network volumes). The wrapper stores an empty `bsd_name` in that case rather than throwing. |
 | **`volume_path` may be missing** | A disk that exists but is not mounted has no `kDADiskDescriptionVolumePathKey`. `volume_path` is `std::nullopt`. The sparseimage in the demo is attached with `-nomount`, so `appeared`/`disappeared` for it carry no path. |
 | **Approval callbacks not wired** | `DARegisterDiskMountApprovalCallback` and friends require the consumer to *answer* each event by returning a `DADissenterRef`. Not modeled in v1; see "Things deliberately NOT done". |
-| **`description_changed` is opt-in** | Off by default — it can be very noisy (filesystem state changes, mount/unmount transitions all fire it). Set `watch_options::watch_description_changed = true` if you actually want it. |
+| **`description_changed` is opt-in** | Off by default — it can be very noisy (filesystem state changes, mount/unmount transitions all fire it). Set `watch_options::watch_description_changed = true` if you actually want it. To narrow which keys trigger the callback, populate `watch_options::description_keys` with the raw key strings (e.g. `"DAVolumeName"`, `"DAVolumePath"` — same shape as `disk_event::changed_keys`); an empty vector (default) keeps DA's "watch all keys" behavior. |
 | **Match dictionary fixed at NULL** | `watch()` does not yet expose a `CFDictionaryRef` filter, so all callbacks see every disk. Filtering is left to the consumer (e.g. `transform_each` over `bsd_name`). |
 
 ## Things deliberately NOT done
@@ -151,9 +151,6 @@ FSEvents.
   request/response sender pair and a per-event ack object.
 - **Match-dictionary filtering** in `watch_options`. Easy to add when
   needed; not in v1.
-- **Description-change key narrowing.** `DARegisterDiskDescriptionChangedCallback`
-  takes a `CFArrayRef` of keys to watch — currently `NULL` (all keys).
-  A future `watch_options::description_keys` can narrow it.
 - **Multi-subscriber fan-out** on a single `da_context`. The
   `__active_` slot is single-shot CAS-guarded; a second concurrent
   `subscribe` fails with `set_error`. For fan-out, build a layer on top.

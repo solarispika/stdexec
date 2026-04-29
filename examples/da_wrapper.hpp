@@ -64,6 +64,19 @@ namespace dax
     bool watch_appeared{true};
     bool watch_disappeared{true};
     bool watch_description_changed{false};
+
+    // When `watch_description_changed` is true, controls which DA description
+    // keys cause a description_changed event to fire. Empty (default) = watch
+    // all keys, matching DA's behavior when `NULL` is passed. Otherwise the
+    // entries are forwarded (as a `CFArrayRef` of `CFString`s) as the `watch`
+    // array to `DARegisterDiskDescriptionChangedCallback`. Values are the
+    // raw strings behind the `kDADiskDescription*` constants — e.g.
+    // `"DAVolumeName"` for `kDADiskDescriptionVolumeNameKey`,
+    // `"DAVolumePath"` for `kDADiskDescriptionVolumePathKey`. Mirrors the
+    // shape of `disk_event::changed_keys`, so a callback's reported key can
+    // be compared directly against this watch list.
+    // Ignored when `watch_description_changed` is false.
+    std::vector<std::string> description_keys{};
   };
 
   class da_context;
@@ -210,6 +223,7 @@ namespace dax
       _Rcvr                            __rcvr_;
       dispatch_queue_t                 __queue_{nullptr};
       DASessionRef                     __session_{nullptr};
+      CFArrayRef                       __desc_keys_array_{nullptr};
       bool                             __reg_appeared_{false};
       bool                             __reg_disappeared_{false};
       bool                             __reg_desc_changed_{false};
@@ -304,9 +318,30 @@ namespace dax
         }
         if (__opts_.watch_description_changed)
         {
+          if (!__opts_.description_keys.empty())
+          {
+            std::vector<CFStringRef> __cf_keys;
+            __cf_keys.reserve(__opts_.description_keys.size());
+            for (const auto& __k : __opts_.description_keys)
+            {
+              if (CFStringRef __s = CFStringCreateWithCString(kCFAllocatorDefault,
+                                                              __k.c_str(),
+                                                              kCFStringEncodingUTF8))
+                __cf_keys.push_back(__s);
+            }
+            __desc_keys_array_ = CFArrayCreate(
+              kCFAllocatorDefault,
+              reinterpret_cast<const void**>(__cf_keys.data()),
+              static_cast<CFIndex>(__cf_keys.size()),
+              &kCFTypeArrayCallBacks);
+            // kCFTypeArrayCallBacks retains each element on insert; drop the
+            // refs we owned from CFStringCreateWithCString.
+            for (CFStringRef __s : __cf_keys)
+              CFRelease(__s);
+          }
           DARegisterDiskDescriptionChangedCallback(__session_,
                                                    /*match=*/nullptr,
-                                                   /*watch=*/nullptr,
+                                                   /*watch=*/__desc_keys_array_,
                                                    &__on_desc_changed_cb,
                                                    __self_as_void);
           __reg_desc_changed_ = true;
@@ -412,6 +447,11 @@ namespace dax
                                reinterpret_cast<void*>(&__on_desc_changed_cb),
                                __self_as_void);
           __reg_desc_changed_ = false;
+        }
+        if (__desc_keys_array_)
+        {
+          CFRelease(__desc_keys_array_);
+          __desc_keys_array_ = nullptr;
         }
         CFRelease(__session_);
         __session_ = nullptr;

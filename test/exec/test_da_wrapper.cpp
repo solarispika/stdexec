@@ -119,4 +119,30 @@ namespace
 
     CHECK(__saw_error);
   }
+
+  TEST_CASE("dax::da_context watch with narrowed description_keys lifecycles cleanly")
+  {
+    exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.desc_keys");
+    exec::static_thread_pool __tp{1};
+    auto                     __timer_sched = __tp.get_scheduler();
+
+    dax::da_context __ctx;
+
+    // Smoke test: enabling description_changed with an explicit (non-empty)
+    // key array exercises the CFStringCreateWithCString / CFArrayCreate /
+    // CFRelease path inside __op. We can't trigger description_changed
+    // deterministically without real disk I/O, so we just verify the
+    // cancellation round-trip with the new field.
+    stdexec::sync_wait(exec::when_any(
+      stdexec::starts_on(__timer_sched, stdexec::just())
+        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+      dax::on_queue(__pool.get_scheduler(),
+                    __ctx.watch({.watch_appeared             = false,
+                                 .watch_disappeared          = false,
+                                 .watch_description_changed  = true,
+                                 .description_keys = {"DAVolumeName", "DAVolumePath"}}))
+        | exec::ignore_all_values()));
+
+    SUCCEED("description_keys narrowing round-trip completed");
+  }
 }  // namespace

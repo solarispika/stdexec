@@ -176,8 +176,10 @@ already gated by `STDEXEC_ENABLE_LIBDISPATCH`).
 
 - Approval callbacks (mount/unmount/eject/peek).
 - Match-dictionary filtering exposed in `watch_options`.
-- `kDADiskDescriptionWatchVolumeName` etc. — the description-change
-  callback currently watches all keys (`NULL`). A future
-  `watch_options::description_keys` could narrow it.
 - Multi-subscriber fan-out on a single context. Same posture as
   FSEvents: build a layer on top.
+
+(Done after this design landed: `watch_options::description_keys`
+narrowing — a `std::vector<CFStringRef>` forwarded as the `watch`
+array to `DARegisterDiskDescriptionChangedCallback`, empty = current
+all-keys behavior.)
