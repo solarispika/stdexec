@@ -124,6 +124,17 @@ namespace experimental::execution::__win32
 
     auto get_scheduler() noexcept -> scheduler;
 
+    // Win32 native handle. nullptr means the process default pool — that is
+    // the documented sentinel `SetThreadpoolCallbackPool` accepts. Exposed
+    // for advanced users that want to bind further thread-pool primitives
+    // (`CreateThreadpoolIo`, `CreateThreadpoolWait`) to the same underlying
+    // pool. Mirrors `libdispatch_queue::native_handle()`.
+    [[nodiscard]]
+    auto native_handle() const noexcept -> PTP_POOL
+    {
+      return threadPool_;
+    }
+
    private:
     PTP_POOL threadPool_;
   };
@@ -916,6 +927,13 @@ namespace experimental::execution::__win32
     auto schedule_after(Duration d) noexcept -> schedule_after_sender<Duration>
     {
       return schedule_after_sender<Duration>{*pool_, std::move(d)};
+    }
+
+    // See `windows_thread_pool::native_handle()`.
+    [[nodiscard]]
+    auto native_handle() const noexcept -> PTP_POOL
+    {
+      return pool_->native_handle();
     }
 
     friend auto operator==(scheduler a, scheduler b) noexcept -> bool

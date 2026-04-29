@@ -64,6 +64,25 @@ TEST_CASE("windows_thread_pool: schedule_completes_on_a_different_thread",
   REQUIRE_FALSE(workThreadId == mainThreadId);
 }
 
+TEST_CASE("windows_thread_pool: default_native_handle_is_process_pool",
+          "[types][windows_thread_pool][native_handle]")
+{
+  // Default-constructed pool uses the process default pool, signalled by a
+  // null PTP_POOL (the documented sentinel for SetThreadpoolCallbackPool).
+  exec::windows_thread_pool tp;
+  CHECK(tp.native_handle() == nullptr);
+  CHECK(tp.get_scheduler().native_handle() == nullptr);
+}
+
+TEST_CASE("windows_thread_pool: custom_pool_native_handle_is_non_null_and_matches_scheduler",
+          "[types][windows_thread_pool][native_handle]")
+{
+  exec::windows_thread_pool tp{2, 4};
+  PTP_POOL                  raw = tp.native_handle();
+  REQUIRE(raw != nullptr);
+  CHECK(tp.get_scheduler().native_handle() == raw);
+}
+
 // TEST_CASE("windows_thread_pool: schedule_multiple_in_parallel", "[types][windows_thread_pool][schedulers]") {
 //   exec::windows_thread_pool tp;
 //   auto sch = tp.get_scheduler();
