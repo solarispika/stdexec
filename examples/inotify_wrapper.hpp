@@ -120,6 +120,7 @@ namespace inx
       virtual ~__op_base() = default;
       virtual void __on_read_complete(const ::io_uring_cqe&) noexcept = 0;
       virtual void __on_cancel_complete(const ::io_uring_cqe&) noexcept = 0;
+      virtual void __on_finalize_complete() noexcept                  = 0;
     };
 
     template <class _Rcvr>
@@ -221,6 +222,41 @@ namespace inx
     using __cancel_op_t =
       experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
 
+    // Deferred-finalize trampoline: submits an IORING_OP_NOP whose CQE arrives
+    // back on the reactor in a fresh frame. This is the unique safe site for
+    // calling __finalize_and_complete — no matter whether the original
+    // "want-to-finish" trigger came from a CQE handler or from an async
+    // downstream receiver callback, the NOP CQE delivers in a stack frame
+    // that has fully unwound from any nested set_next chain. Same shape as
+    // rdc_pool_wrapper.hpp's __schedule_cleanup + SubmitThreadpoolWork.
+    struct __finalize_task
+    {
+      __op_base*                                      __outer_;
+      experimental::execution::__io_uring::__context* __ctx_;
+
+      auto context() noexcept
+        -> experimental::execution::__io_uring::__context&
+      {
+        return *__ctx_;
+      }
+
+      static constexpr auto ready() noexcept -> bool { return false; }
+
+      void submit(::io_uring_sqe& __sqe) noexcept
+      {
+        std::memset(&__sqe, 0, sizeof(__sqe));
+        __sqe.opcode = IORING_OP_NOP;
+      }
+
+      void complete(const ::io_uring_cqe&) noexcept
+      {
+        __outer_->__on_finalize_complete();
+      }
+    };
+
+    using __finalize_op_t =
+      experimental::execution::__io_uring::__io_task_facade<__finalize_task>;
+
     template <class _Rcvr>
     struct __op : __op_base
     {
@@ -275,9 +311,14 @@ namespace inx
       std::vector<fs_event>          __staging_;
       std::optional<__read_op_t>     __read_op_;
       std::optional<__cancel_op_t>   __cancel_op_;
+      std::optional<__finalize_op_t> __finalize_op_;
       std::unique_ptr<__next_op_t>   __next_op_;
       std::optional<__stop_callback_t> __stop_cb_;
       std::atomic<bool>              __stop_requested_{false};
+      // CAS-gated single-shot flag: only the first caller of
+      // __request_finalize submits the NOP. Subsequent callers no-op so the
+      // counter dance and the finish_kind aren't disturbed.
+      std::atomic<bool>              __finalize_scheduled_{false};
       // Shadow of the in-flight READ facade's __task*. Published (release) by
       // __post_read after emplace, read (acquire) by __on_stop_fn off-thread.
       std::atomic<experimental::execution::__io_uring::__task*>
@@ -358,6 +399,27 @@ namespace inx
         __read_op_->start();
       }
 
+      // Single entry to "we want to finish". CAS-gated so concurrent
+      // requests collapse to one NOP submission. Increments __pending_cqes_
+      // so that the NOP CQE is part of the same counter dance as the read
+      // and (optional) cancel CQEs — __on_finalize_complete is the unique
+      // last-out site that actually drives __finalize_and_complete.
+      void __request_finalize(__finish_kind __k) noexcept
+      {
+        bool __expected = false;
+        if (!__finalize_scheduled_.compare_exchange_strong(
+              __expected, true, std::memory_order_acq_rel))
+        {
+          return;
+        }
+        __finish_kind_ = __k;
+        __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+        __finalize_op_.emplace(
+          std::in_place,
+          __finalize_task{static_cast<__op_base*>(this), __ring_});
+        __finalize_op_->start();
+      }
+
       // Called on the io_uring reactor thread.
       void __on_read_complete(const ::io_uring_cqe& __cqe) noexcept override
       {
@@ -371,70 +433,70 @@ namespace inx
         {
           if (__cqe.res == -ECANCELED || __stop_requested_.load(std::memory_order_acquire))
           {
-            __finish_kind_ = __finish_kind::__stopped;
+            __request_finalize(__finish_kind::__stopped);
           }
           else
           {
             __error_ = std::make_exception_ptr(std::system_error{
               -__cqe.res, std::system_category(), "inotify read"});
-            __finish_kind_ = __finish_kind::__error;
+            __request_finalize(__finish_kind::__error);
           }
-          // Decrement THIS CQE's debt. If a cancel was submitted, its CQE is
-          // still pending; __on_cancel_complete will trigger the finalize.
-          if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        }
+        else
+        {
+          __parse_into_staging(static_cast<std::size_t>(__cqe.res));
+
+          bool __overflow = false;
+          // IN_Q_OVERFLOW arrives as a synthetic event with wd=-1; surface it
+          // batch-level and remove it from the events span.
+          std::erase_if(__staging_, [&](const fs_event& __e) {
+            if (__e.wd == -1 && (__e.mask & IN_Q_OVERFLOW))
+            {
+              __overflow = true;
+              return true;
+            }
+            return false;
+          });
+
+          fs_batch __batch{__staging_, __overflow};
+
+          try
           {
-            __finalize_and_complete();
+            __next_op_.reset(new __next_op_t(stdexec::connect(
+              exec::set_next(__rcvr_, stdexec::just(__batch)),
+              __next_receiver_t{this})));
+            stdexec::start(*__next_op_);
           }
-          return;
-        }
-
-        __parse_into_staging(static_cast<std::size_t>(__cqe.res));
-
-        bool __overflow = false;
-        // IN_Q_OVERFLOW arrives as a synthetic event with wd=-1; surface it
-        // batch-level and remove it from the events span.
-        std::erase_if(__staging_, [&](const fs_event& __e) {
-          if (__e.wd == -1 && (__e.mask & IN_Q_OVERFLOW))
+          catch (...)
           {
-            __overflow = true;
-            return true;
+            __error_ = std::current_exception();
+            __request_finalize(__finish_kind::__error);
           }
-          return false;
-        });
-
-        fs_batch __batch{__staging_, __overflow};
-
-        try
-        {
-          __next_op_.reset(new __next_op_t(stdexec::connect(
-            exec::set_next(__rcvr_, stdexec::just(__batch)),
-            __next_receiver_t{this})));
-          stdexec::start(*__next_op_);
-        }
-        catch (...)
-        {
-          __error_ = std::current_exception();
-          __finish_kind_ = __finish_kind::__error;
         }
 
-        // Tail decrement for THIS CQE. Must happen AFTER any synchronous
-        // downstream chain (start(*__next_op_)) has had its chance to call
-        // back into __on_next_value, which may have called __post_read and
-        // bumped the counter again. Net effect on the value path: this CQE's
-        // -1 is paired with the new READ's +1 from __post_read, so the
-        // counter never returns to 0 while the watch is steady-state.
-        if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1
-            && __finish_kind_ != __finish_kind::__none)
-        {
-          __finalize_and_complete();
-        }
+        // Tail decrement for THIS read CQE. Finalization is NOT triggered
+        // here; the NOP CQE submitted by __request_finalize is the unique
+        // safe-frame finalizer (see __on_finalize_complete). On the steady
+        // value path, __post_read (called from set_value) has already
+        // bumped the counter for the next read, so this dec doesn't strand.
+        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
       }
 
       // Called on the io_uring reactor thread when the cancel CQE lands.
+      // Plain decrement — finalization is owned by __on_finalize_complete.
       void __on_cancel_complete(const ::io_uring_cqe&) noexcept override
       {
-        if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1
-            && __finish_kind_ != __finish_kind::__none)
+        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+      }
+
+      // The NOP CQE submitted by __request_finalize lands here on the
+      // reactor in a fresh frame. This is the ONE site that calls
+      // __finalize_and_complete — by this point any nested set_next chain
+      // has unwound, the read CQE's debt is settled, and (if a cancel was
+      // submitted) the cancel CQE has been observed too.
+      void __on_finalize_complete() noexcept override
+      {
+        if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
           __finalize_and_complete();
         }
@@ -480,47 +542,52 @@ namespace inx
         // unique_ptr::reset(new ...) will destroy this child after start()
         // unwinds.
         //
-        // This runs synchronously from inside __on_read_complete's
-        // start(*__next_op_) call. If a stop has been requested, we set the
-        // finish kind and DO NOT post a new read — the tail decrement at
-        // the end of __on_read_complete (and/or the pending cancel CQE)
-        // will trigger __finalize_and_complete.
+        // May run either synchronously from __on_read_complete's
+        // start(*__next_op_) call, OR asynchronously from a downstream that
+        // hops threads. Both cases are handled identically: route through
+        // __request_finalize so the NOP CQE drives termination.
         if (__stop_requested_.load(std::memory_order_acquire))
         {
-          __finish_kind_ = __finish_kind::__stopped;
+          __request_finalize(__finish_kind::__stopped);
           return;
         }
         __post_read();
       }
 
-      // Downstream completed with set_stopped — synchronous from
-      // __on_read_complete's start(*__next_op_). Set finish kind only;
-      // __on_read_complete's tail decrement performs the finalize.
+      // Downstream completed with set_stopped. Route through the NOP-CQE
+      // trampoline regardless of caller (sync nested or async), so that
+      // __finalize_and_complete always runs in a fresh reactor frame.
       void __on_next_stopped() noexcept
       {
-        __finish_kind_ = __finish_kind::__stopped;
+        __request_finalize(__finish_kind::__stopped);
       }
 
       // Downstream completed with set_error — same shape as next_stopped.
       void __on_next_error(std::exception_ptr __ep) noexcept
       {
         __error_ = std::move(__ep);
-        __finish_kind_ = __finish_kind::__error;
+        __request_finalize(__finish_kind::__error);
       }
 
-      // The single completion path. Only invoked once both the READ CQE and
-      // (if submitted) the CANCEL CQE have been observed by the reactor —
-      // so it is safe to destroy __cancel_op_ here. Same ordering rationale
-      // as the prior __teardown(): drop the stop callback first to prevent
-      // a late stop request from observing half-torn-down state, then drop
-      // the in-flight downstream op, then the io_uring facades, then
-      // release the active slot. Finally, complete the user's receiver.
+      // The single completion path. Called ONLY from
+      // __on_finalize_complete, which runs in a fresh reactor CQE frame
+      // delivered by the IORING_OP_NOP submitted by __request_finalize.
+      // By this point: every read/cancel CQE has been observed (counter
+      // reached 0 with the NOP itself decrementing last), and any nested
+      // set_next chain has unwound — so resetting __next_op_, __cancel_op_,
+      // __read_op_ and the in-flight __finalize_op_ facade we're inside is
+      // safe (the latter mirrors __io_task_facade's documented self-destroy
+      // pattern). Drop the stop callback first to prevent a late stop
+      // request from observing half-torn-down state, then drop the
+      // downstream op, then the io_uring facades, then release the active
+      // slot. Finally, complete the user's receiver.
       void __finalize_and_complete() noexcept
       {
         __stop_cb_.reset();
         __next_op_.reset();
         __cancel_op_.reset();
         __read_op_.reset();
+        __finalize_op_.reset();
         __ctx_->__active_.store(nullptr, std::memory_order_release);
 
         if (__finish_kind_ == __finish_kind::__error)
