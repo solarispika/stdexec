@@ -182,16 +182,97 @@ namespace experimental::execution
       return STDEXEC::forward_progress_guarantee::parallel;
     }
 
+    auto native_handle() const noexcept -> dispatch_queue_t;
+
     libdispatch_queue *queue_;
   };
 
   struct libdispatch_queue
   {
-    bool operator==(libdispatch_queue const &) const = default;
+    libdispatch_queue() = default;
+
+    libdispatch_queue(libdispatch_queue const &)                     = delete;
+    auto operator=(libdispatch_queue const &) -> libdispatch_queue & = delete;
+
+    libdispatch_queue(libdispatch_queue &&other) noexcept
+      : priority(other.priority)
+      , __q_(other.__q_)
+      , __owns_(other.__owns_)
+    {
+      other.__q_    = nullptr;
+      other.__owns_ = false;
+    }
+
+    auto operator=(libdispatch_queue &&other) noexcept -> libdispatch_queue &
+    {
+      if (this != &other)
+      {
+        if (__owns_ && __q_)
+          dispatch_release(__q_);
+        __q_          = other.__q_;
+        priority      = other.priority;
+        __owns_       = other.__owns_;
+        other.__q_    = nullptr;
+        other.__owns_ = false;
+      }
+      return *this;
+    }
+
+    ~libdispatch_queue()
+    {
+      if (__owns_ && __q_)
+        dispatch_release(__q_);
+    }
+
+    friend auto operator==(libdispatch_queue const &a, libdispatch_queue const &b) noexcept -> bool
+    {
+      return a.__q_ == b.__q_ && a.priority == b.priority;
+    }
+
+    static auto make_serial(char const *label, dispatch_qos_class_t qos = QOS_CLASS_DEFAULT)
+      -> libdispatch_queue
+    {
+      auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, qos, 0);
+      auto raw  = dispatch_queue_create(label, attr);
+      return libdispatch_queue{raw, true};
+    }
+
+    static auto make_concurrent(char const *label, dispatch_qos_class_t qos = QOS_CLASS_DEFAULT)
+      -> libdispatch_queue
+    {
+      auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, qos, 0);
+      auto raw  = dispatch_queue_create(label, attr);
+      return libdispatch_queue{raw, true};
+    }
+
+    static auto make_serial(char const          *label,
+                            libdispatch_queue   &target,
+                            dispatch_qos_class_t qos = QOS_CLASS_UNSPECIFIED) -> libdispatch_queue
+    {
+      auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, qos, 0);
+      auto raw  = dispatch_queue_create_with_target(label, attr, target.native_handle());
+      return libdispatch_queue{raw, true};
+    }
+
+    static auto
+    make_concurrent(char const          *label,
+                    libdispatch_queue   &target,
+                    dispatch_qos_class_t qos = QOS_CLASS_UNSPECIFIED) -> libdispatch_queue
+    {
+      auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, qos, 0);
+      auto raw  = dispatch_queue_create_with_target(label, attr, target.native_handle());
+      return libdispatch_queue{raw, true};
+    }
+
+    static auto wrap(dispatch_queue_t q) -> libdispatch_queue
+    {
+      dispatch_retain(q);
+      return libdispatch_queue{q, true};
+    }
 
     void submit(__libdispatch::task_base *f)
     {
-      auto queue = dispatch_get_global_queue(priority, 0);
+      auto queue = __q_ ? __q_ : dispatch_get_global_queue(priority, 0);
       dispatch_async_f(queue, f, reinterpret_cast<void (*)(void *) noexcept>(f->execute));
     }
 
@@ -200,8 +281,27 @@ namespace experimental::execution
       return libdispatch_scheduler{this};
     }
 
+    auto native_handle() const noexcept -> dispatch_queue_t
+    {
+      return __q_ ? __q_ : dispatch_get_global_queue(priority, 0);
+    }
+
     int priority{DISPATCH_QUEUE_PRIORITY_DEFAULT};
+
+   private:
+    libdispatch_queue(dispatch_queue_t q, bool owns) noexcept
+      : __q_(q)
+      , __owns_(owns)
+    { }
+
+    dispatch_queue_t __q_{nullptr};
+    bool             __owns_{false};
   };
+
+  inline auto libdispatch_scheduler::native_handle() const noexcept -> dispatch_queue_t
+  {
+    return queue_->native_handle();
+  }
 
   namespace __libdispatch
   {
