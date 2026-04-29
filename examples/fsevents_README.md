@@ -26,23 +26,57 @@ Both demos write to / watch a temp directory (`fsx_demo`, `fsx_demo_coro`).
 ## API
 
 ```cpp
+exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("my.pool");
 fsx::fsevents_context ctx{{"/path/to/dir"}};
 
-ctx.watch({
-    .since        = kFSEventStreamEventIdSinceNow,  // or a persisted id
-    .latency      = 0.2,
-    .create_flags = kFSEventStreamCreateFlagFileEvents
-                  | kFSEventStreamCreateFlagNoDefer
-                  | kFSEventStreamCreateFlagWatchRoot,
-})
-| exec::transform_each(stdexec::then([](fsx::fs_batch b){ ... }))
-| exec::ignore_all_values()
+stdexec::sync_wait(
+    fsx::on_queue(pool.get_scheduler(),
+                  ctx.watch({.since = kFSEventStreamEventIdSinceNow,
+                             .latency = 0.2,
+                             .create_flags = kFSEventStreamCreateFlagFileEvents
+                                           | kFSEventStreamCreateFlagNoDefer
+                                           | kFSEventStreamCreateFlagWatchRoot}))
+  | exec::transform_each(stdexec::then([](fsx::fs_batch b){ ... }))
+  | exec::ignore_all_values());
 ```
 
 Each `fs_batch` carries `events` (span of `fs_event{path, flags, id}`),
 `last_id`, `had_drops`, `must_rescan`. `ctx.last_completed_id()` advances
 **only after** the next sender for a batch completes — safe to persist as
 a resume point.
+
+## Queue selection / scheduler
+
+The wrapper does not own a dispatch queue. The queue is selected at the
+pipeline level via `fsx::on_queue`:
+
+```cpp
+exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("...");
+sync_wait(fsx::on_queue(pool.get_scheduler(), ctx.watch(opts)) | ...);
+```
+
+`__watch_sender::subscribe` is constrained at compile time to require a
+`libdispatch_scheduler` in the receiver's env. Composing with any other
+scheduler type is a compile error — this prevents silently falling back
+to a default queue when the caller intended e.g. a `static_thread_pool`.
+
+### Why `fsx::on_queue` instead of `stdexec::starts_on`?
+
+`stdexec::starts_on(sched, child)` rewrites the child via the
+regular-sender path (`__sequence(continues_on(just(), sched), child)`),
+which strips `item_types` and other sequence-sender attributes —
+`transform_each` downstream then sees a regular sender and the per-batch
+type is lost. `fsx::on_queue` is a small (~80 LoC) sequence-sender-aware
+adapter that wraps the receiver to expose `get_scheduler ->
+libdispatch_scheduler` in its env without losing sequence-sender
+semantics. See `examples/fsevents_wrapper.hpp` for the implementation.
+
+### Internal serial queue
+
+Each watch operation creates its own serial queue with the user's queue
+as target (`dispatch_queue_create_with_target`). The serial attribute is
+required by the wrapper's callback ↔ teardown serialization idiom; the
+worker thread comes from the user's pool.
 
 ## What happens under the hood
 

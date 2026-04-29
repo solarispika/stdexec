@@ -39,18 +39,20 @@ Append to `test/exec/CMakeLists.txt` after the `catch_discover_tests(test.exec)`
 
 ```cmake
 if(STDEXEC_ENABLE_LIBDISPATCH)
-    add_executable(test.libdispatch_ext test_libdispatch.cpp)
+    add_executable(test.libdispatch_ext ../test_main.cpp test_libdispatch.cpp)
     target_link_libraries(test.libdispatch_ext
         PUBLIC
         STDEXEC::stdexec
         stdexec_executable_flags
-        Catch2::Catch2WithMain
+        Catch2::Catch2
         PRIVATE
         common_test_settings)
 endif()
 ```
 
-(Note: uses `Catch2WithMain` because we don't share a `main()` source with `test.exec`.)
+(Note: project pins Catch2 v2.13.6 — the v3-only `Catch2WithMain` target
+isn't available, so we add `../test_main.cpp` to provide `main()` via
+`CATCH_CONFIG_MAIN`, mirroring how `test.exec` is built.)
 
 **Step 2: Reconfigure CMake**
 
@@ -77,6 +79,11 @@ Avoids the unrelated test_merge_each_threaded.cpp build failure that
 currently blocks linking test.exec on this branch. Mirrors the same
 sources but builds independently with Catch2WithMain."
 ```
+
+**Deviation from the original Task 0 wording**: original snippet specified
+`Catch2::Catch2WithMain`. Project pins Catch2 v2.13.6 which has no such
+target; switched to `Catch2::Catch2 + ../test_main.cpp` (matches the
+neighboring `test.exec` style).
 
 ---
 
@@ -266,6 +273,16 @@ Expected: success.
 git add include/exec/libdispatch_queue.hpp test/exec/test_libdispatch.cpp
 git commit -m "feat: libdispatch_queue::make_serial / make_concurrent factories"
 ```
+
+**Deviation from the original Task 2 wording**: plan suggested
+`libdispatch_queue q; q.__q_ = raw; q.__owns_ = true; return q;` from the
+factory body. With copy-ctor deleted and no move ctor (deferred to Task 5),
+returning a named local lvalue would require an accessible move/copy ctor —
+NRVO is non-mandatory. Shipped form uses a private 2-arg ctor
+`(dispatch_queue_t, bool)` and `return libdispatch_queue{raw, true};`
+(prvalue → mandatory copy elision). Same private ctor is reused by Tasks 3
+and 4. Task 5's TDD precondition (`std::move` must fail to compile) is
+preserved.
 
 ---
 
@@ -475,6 +492,13 @@ git add include/exec/libdispatch_queue.hpp test/exec/test_libdispatch.cpp
 git commit -m "feat: move semantics for libdispatch_queue"
 ```
 
+**Deviation from the original Task 5 wording**: plan's mem-init order was
+`__q_, priority, __owns_`. Class layout has `priority` declared before the
+private `__q_` / `__owns_`, so this triggered `-Wreorder-ctor`. Mem-init
+list reordered to `priority, __q_, __owns_` to match declaration order
+(semantically equivalent — fields are scalars/pointers with no construction-
+order dependencies).
+
 ---
 
 ## Task 6: Add `native_handle()` to `libdispatch_scheduler`
@@ -523,6 +547,13 @@ Expected: 10 test cases pass.
 git add include/exec/libdispatch_queue.hpp test/exec/test_libdispatch.cpp
 git commit -m "feat: libdispatch_scheduler::native_handle accessor"
 ```
+
+**Deviation from the original Task 6 wording**: plan called for an inline
+in-class definition of `libdispatch_scheduler::native_handle()`. At the
+point `struct libdispatch_scheduler` is defined, `libdispatch_queue` is
+only forward-declared, so `queue_->native_handle()` cannot be inlined.
+Shipped form declares the method in-class and provides an out-of-class
+`inline` definition after `struct libdispatch_queue`'s closing brace.
 
 ---
 

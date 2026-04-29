@@ -194,6 +194,11 @@ namespace experimental::execution
     libdispatch_queue(libdispatch_queue const &)                     = delete;
     auto operator=(libdispatch_queue const &) -> libdispatch_queue & = delete;
 
+    // Moved-from state: __q_ == nullptr, __owns_ == false. Dtor is a no-op.
+    // `priority` is left at its original value; native_handle() therefore falls
+    // back to dispatch_get_global_queue(original_priority, 0), which is harmless
+    // because callers should not use a moved-from object except to assign or
+    // destroy.
     libdispatch_queue(libdispatch_queue &&other) noexcept
       : priority(other.priority)
       , __q_(other.__q_)
