@@ -33,12 +33,14 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
+#include <map>
 #include <memory>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace dax
@@ -77,6 +79,19 @@ namespace dax
     // be compared directly against this watch list.
     // Ignored when `watch_description_changed` is false.
     std::vector<std::string> description_keys{};
+
+    // Match filter forwarded as the `match` CFDictionaryRef argument to all
+    // three DARegister*Callback calls — only disks whose description matches
+    // every entry fire callbacks. Empty (default) = pass `nullptr` = match
+    // every disk (prior behavior).
+    //
+    // Keys are the raw DA description key strings ("DAMediaWhole",
+    // "DAVolumeKind", ...) — same form as `description_keys`. Values cover
+    // the two CF types DA uses for match values: `bool` (most match keys
+    // are CFBoolean, e.g. `DAMediaWhole`) and `std::string` (a few are
+    // CFString, e.g. `DAVolumeKind = "apfs"`). Other CF value types
+    // (CFNumber, CFUUID, ...) are not modeled — extend if needed.
+    std::map<std::string, std::variant<bool, std::string>> match{};
   };
 
   class da_context;
@@ -224,6 +239,7 @@ namespace dax
       dispatch_queue_t                 __queue_{nullptr};
       DASessionRef                     __session_{nullptr};
       CFArrayRef                       __desc_keys_array_{nullptr};
+      CFDictionaryRef                  __match_dict_{nullptr};
       bool                             __reg_appeared_{false};
       bool                             __reg_disappeared_{false};
       bool                             __reg_desc_changed_{false};
@@ -300,10 +316,60 @@ namespace dax
 
         void* __self_as_void = static_cast<__op_base*>(this);
 
+        if (!__opts_.match.empty())
+        {
+          std::vector<CFStringRef> __keys;
+          std::vector<CFTypeRef>   __values;
+          // CFBoolean is shared/static and must not be released; track only
+          // the CFStrings we created so we can drop our owning refs after
+          // CFDictionaryCreate retains them.
+          std::vector<CFStringRef> __string_values_to_release;
+          __keys.reserve(__opts_.match.size());
+          __values.reserve(__opts_.match.size());
+          for (const auto& [__k, __v] : __opts_.match)
+          {
+            CFStringRef __ks = CFStringCreateWithCString(kCFAllocatorDefault,
+                                                          __k.c_str(),
+                                                          kCFStringEncodingUTF8);
+            if (!__ks)
+              continue;
+            CFTypeRef __vs = nullptr;
+            if (const bool* __b = std::get_if<bool>(&__v))
+            {
+              __vs = *__b ? kCFBooleanTrue : kCFBooleanFalse;
+            }
+            else
+            {
+              __vs = CFStringCreateWithCString(kCFAllocatorDefault,
+                                                std::get<std::string>(__v).c_str(),
+                                                kCFStringEncodingUTF8);
+              if (!__vs)
+              {
+                CFRelease(__ks);
+                continue;
+              }
+              __string_values_to_release.push_back(static_cast<CFStringRef>(__vs));
+            }
+            __keys.push_back(__ks);
+            __values.push_back(__vs);
+          }
+          __match_dict_ = CFDictionaryCreate(
+            kCFAllocatorDefault,
+            reinterpret_cast<const void**>(__keys.data()),
+            __values.data(),
+            static_cast<CFIndex>(__keys.size()),
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
+          for (CFStringRef __ks : __keys)
+            CFRelease(__ks);
+          for (CFStringRef __vs : __string_values_to_release)
+            CFRelease(__vs);
+        }
+
         if (__opts_.watch_appeared)
         {
           DARegisterDiskAppearedCallback(__session_,
-                                         /*match=*/nullptr,
+                                         /*match=*/__match_dict_,
                                          &__on_appeared_cb,
                                          __self_as_void);
           __reg_appeared_ = true;
@@ -311,7 +377,7 @@ namespace dax
         if (__opts_.watch_disappeared)
         {
           DARegisterDiskDisappearedCallback(__session_,
-                                            /*match=*/nullptr,
+                                            /*match=*/__match_dict_,
                                             &__on_disappeared_cb,
                                             __self_as_void);
           __reg_disappeared_ = true;
@@ -340,7 +406,7 @@ namespace dax
               CFRelease(__s);
           }
           DARegisterDiskDescriptionChangedCallback(__session_,
-                                                   /*match=*/nullptr,
+                                                   /*match=*/__match_dict_,
                                                    /*watch=*/__desc_keys_array_,
                                                    &__on_desc_changed_cb,
                                                    __self_as_void);
@@ -452,6 +518,11 @@ namespace dax
         {
           CFRelease(__desc_keys_array_);
           __desc_keys_array_ = nullptr;
+        }
+        if (__match_dict_)
+        {
+          CFRelease(__match_dict_);
+          __match_dict_ = nullptr;
         }
         CFRelease(__session_);
         __session_ = nullptr;

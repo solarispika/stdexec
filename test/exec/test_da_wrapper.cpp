@@ -145,4 +145,30 @@ namespace
 
     SUCCEED("description_keys narrowing round-trip completed");
   }
+
+  TEST_CASE("dax::da_context watch with match filter lifecycles cleanly")
+  {
+    exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.match");
+    exec::static_thread_pool __tp{1};
+    auto                     __timer_sched = __tp.get_scheduler();
+
+    dax::da_context __ctx;
+
+    // Smoke test: a non-empty match filter mixing both supported value types
+    // (bool -> CFBoolean, string -> CFString) exercises CFDictionaryCreate
+    // and the corresponding teardown path. We can't observe filtering
+    // behavior without real disk I/O, so we only verify the cancellation
+    // round-trip — same posture as the description_keys test above.
+    dax::watch_options __opts{};
+    __opts.match["DAMediaWhole"] = true;
+    __opts.match["DAVolumeKind"] = std::string{"apfs"};
+
+    stdexec::sync_wait(exec::when_any(
+      stdexec::starts_on(__timer_sched, stdexec::just())
+        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+      dax::on_queue(__pool.get_scheduler(), __ctx.watch(__opts))
+        | exec::ignore_all_values()));
+
+    SUCCEED("match filter round-trip completed");
+  }
 }  // namespace

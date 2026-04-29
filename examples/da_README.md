@@ -140,7 +140,7 @@ FSEvents.
 | **`volume_path` may be missing** | A disk that exists but is not mounted has no `kDADiskDescriptionVolumePathKey`. `volume_path` is `std::nullopt`. The sparseimage in the demo is attached with `-nomount`, so `appeared`/`disappeared` for it carry no path. |
 | **Approval callbacks not wired** | `DARegisterDiskMountApprovalCallback` and friends require the consumer to *answer* each event by returning a `DADissenterRef`. Not modeled in v1; see "Things deliberately NOT done". |
 | **`description_changed` is opt-in** | Off by default — it can be very noisy (filesystem state changes, mount/unmount transitions all fire it). Set `watch_options::watch_description_changed = true` if you actually want it. To narrow which keys trigger the callback, populate `watch_options::description_keys` with the raw key strings (e.g. `"DAVolumeName"`, `"DAVolumePath"` — same shape as `disk_event::changed_keys`); an empty vector (default) keeps DA's "watch all keys" behavior. |
-| **Match dictionary fixed at NULL** | `watch()` does not yet expose a `CFDictionaryRef` filter, so all callbacks see every disk. Filtering is left to the consumer (e.g. `transform_each` over `bsd_name`). |
+| **Match dictionary** | Populate `watch_options::match` to narrow which disks fire callbacks (forwarded as the `match` `CFDictionaryRef` to all three `DARegister*Callback` calls). Keys are the raw DA description key strings — same shape as `description_keys` — and values are `bool` (CFBoolean keys, e.g. `{"DAMediaWhole", true}`) or `std::string` (CFString keys, e.g. `{"DAVolumeKind", "apfs"}`). Empty (default) = match every disk. |
 
 ## Things deliberately NOT done
 
@@ -149,8 +149,6 @@ FSEvents.
   `NULL` to allow). A `sequence_sender` whose item is fire-and-forget
   does not naturally express this. A future PR can decide between a
   request/response sender pair and a per-event ack object.
-- **Match-dictionary filtering** in `watch_options`. Easy to add when
-  needed; not in v1.
 - **Multi-subscriber fan-out** on a single `da_context`. The
   `__active_` slot is single-shot CAS-guarded; a second concurrent
   `subscribe` fails with `set_error`. For fan-out, build a layer on top.

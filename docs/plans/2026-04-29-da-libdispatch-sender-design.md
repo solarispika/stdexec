@@ -175,11 +175,17 @@ already gated by `STDEXEC_ENABLE_LIBDISPATCH`).
 ## Out of scope (follow-ups)
 
 - Approval callbacks (mount/unmount/eject/peek).
-- Match-dictionary filtering exposed in `watch_options`.
 - Multi-subscriber fan-out on a single context. Same posture as
   FSEvents: build a layer on top.
 
-(Done after this design landed: `watch_options::description_keys`
-narrowing — a `std::vector<CFStringRef>` forwarded as the `watch`
-array to `DARegisterDiskDescriptionChangedCallback`, empty = current
-all-keys behavior.)
+(Done after this design landed:
+- `watch_options::description_keys` narrowing — a
+  `std::vector<std::string>` of raw DA description key strings,
+  marshalled to a `CFArrayRef` of `CFString`s and forwarded as the
+  `watch` array to `DARegisterDiskDescriptionChangedCallback`. Empty =
+  prior all-keys behavior.
+- `watch_options::match` filter — a
+  `std::map<std::string, std::variant<bool, std::string>>`,
+  marshalled to a `CFDictionaryRef` (`CFString` keys, `CFBoolean` /
+  `CFString` values) and forwarded as the `match` argument to all
+  three `DARegister*Callback` calls. Empty = match every disk.)
