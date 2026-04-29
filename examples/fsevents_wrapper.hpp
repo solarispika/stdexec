@@ -429,12 +429,8 @@ namespace fsx
       watch_options     __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires stdexec::__callable<stdexec::get_scheduler_t,
-                                     stdexec::env_of_t<_Rcvr> const&>
-              && std::same_as<
-                   stdexec::__call_result_t<stdexec::get_scheduler_t,
-                                            stdexec::env_of_t<_Rcvr> const&>,
-                   exec::libdispatch_scheduler>
+        requires examples_detail::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+                                                      exec::libdispatch_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
@@ -443,9 +439,7 @@ namespace fsx
 
   }  // namespace __detail
 
-  // env-injection adapter exposing a libdispatch_scheduler via
-  // get_scheduler in the receiver env. See examples/on_scheduler.hpp
-  // and examples/sequence_sender_on_scheduler.md.
+  // See examples/sequence_sender_on_scheduler.md.
   inline constexpr examples_detail::__on_scheduler_t on_queue{};
 
   inline auto fsevents_context::watch(watch_options __opts) -> __detail::__watch_sender

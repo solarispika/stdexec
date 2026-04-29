@@ -67,8 +67,7 @@ TEST_CASE("windows_thread_pool: schedule_completes_on_a_different_thread",
 TEST_CASE("windows_thread_pool: default_native_handle_is_process_pool",
           "[types][windows_thread_pool][native_handle]")
 {
-  // Default-constructed pool uses the process default pool, signalled by a
-  // null PTP_POOL (the documented sentinel for SetThreadpoolCallbackPool).
+  // nullptr PTP_POOL is the documented sentinel for the process default pool.
   exec::windows_thread_pool tp;
   CHECK(tp.native_handle() == nullptr);
   CHECK(tp.get_scheduler().native_handle() == nullptr);

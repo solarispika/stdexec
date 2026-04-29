@@ -188,11 +188,8 @@ namespace rdcx::pool
         , __opts_{__o}
         , __rcvr_{std::move(__r)}
       {
-        // Bind callback environment to the user-supplied pool. The receiver
-        // env is required (by subscribe's `requires` clause) to expose a
-        // windows_thread_pool::scheduler via get_scheduler; nullptr from
-        // native_handle() is the documented sentinel for "use process
-        // default pool", which SetThreadpoolCallbackPool already accepts.
+        // nullptr from native_handle() is the documented sentinel for
+        // "process default pool" that SetThreadpoolCallbackPool accepts.
         InitializeThreadpoolEnvironment(&__env_);
         auto __sch = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
         SetThreadpoolCallbackPool(&__env_, __sch.native_handle());
@@ -581,12 +578,8 @@ namespace rdcx::pool
       watch_options __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires stdexec::__callable<stdexec::get_scheduler_t,
-                                     stdexec::env_of_t<_Rcvr> const&>
-              && std::same_as<
-                   stdexec::__call_result_t<stdexec::get_scheduler_t,
-                                            stdexec::env_of_t<_Rcvr> const&>,
-                   exec::windows_thread_pool::scheduler>
+        requires examples_detail::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+                                                      exec::windows_thread_pool::scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
@@ -600,8 +593,6 @@ namespace rdcx::pool
     return {this, __opts};
   }
 
-  // env-injection adapter exposing a windows_thread_pool::scheduler via
-  // get_scheduler in the receiver env. See examples/on_scheduler.hpp
-  // and examples/sequence_sender_on_scheduler.md.
+  // See examples/sequence_sender_on_scheduler.md.
   inline constexpr examples_detail::__on_scheduler_t on_pool{};
 }  // namespace rdcx::pool

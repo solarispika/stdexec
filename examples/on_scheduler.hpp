@@ -121,4 +121,11 @@ namespace examples_detail
       return {std::move(__snd), std::move(__sched)};
     }
   };
+
+  // For wrappers whose `subscribe` requires a specific scheduler type in
+  // the receiver's env (typically the one this adapter injected).
+  template <class _Env, class _Sched>
+  concept __env_has_scheduler =
+    stdexec::__callable<stdexec::get_scheduler_t, _Env const&>
+    && std::same_as<stdexec::__call_result_t<stdexec::get_scheduler_t, _Env const&>, _Sched>;
 }  // namespace examples_detail

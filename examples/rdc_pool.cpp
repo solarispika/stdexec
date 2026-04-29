@@ -74,10 +74,6 @@ auto main() -> int
     }
   }};
 
-  // The IO completions for ctx.watch() run on this pool. on_pool injects
-  // the scheduler into the receiver env so subscribe()'s requires-clause
-  // is satisfied; we cannot use stdexec::starts_on for this because it
-  // does not preserve sequence_sender semantics for its child.
   exec::windows_thread_pool __wtp{2, 4};
 
   exec::static_thread_pool __timer_pool{1};
