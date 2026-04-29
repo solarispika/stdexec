@@ -19,6 +19,7 @@
 
 #include "fsevents_wrapper.hpp"
 
+#include "exec/libdispatch_queue.hpp"
 #include "exec/sequence/ignore_all_values.hpp"
 #include "exec/sequence/transform_each.hpp"
 #include "exec/static_thread_pool.hpp"
@@ -252,6 +253,8 @@ auto main() -> int
 
   exec::static_thread_pool __pool{2};
   auto                     __sched = __pool.get_scheduler();
+  exec::libdispatch_queue  __fsx_pool =
+    exec::libdispatch_queue::make_concurrent("fsx.coro.producer");
 
   // Run the producer on a worker thread (its push() blocks the dispatch queue
   // for backpressure), and consume() in the foreground. A 3s timer cancels
@@ -259,7 +262,7 @@ auto main() -> int
   std::atomic<bool> __producer_done{false};
   std::thread       __producer_thread{[&] {
     auto __pipeline =
-      __ctx.watch()
+      fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
       | exec::transform_each(stdexec::then([&](fsx::fs_batch __b) {
           std::printf("[prod] pushing batch last_id=%llu (%zu events)\n",
                       static_cast<unsigned long long>(__b.last_id),

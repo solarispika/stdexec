@@ -737,6 +737,17 @@ git add examples/fsevents.cpp
 git commit -m "examples: fsevents demo uses starts_on for queue selection"
 ```
 
+**Deviation from the original Task 9 wording**: `stdexec::starts_on` does not
+preserve sequence_sender semantics for its child. Verified at
+`include/stdexec/__detail/__starts_on.hpp:108-136`: it rewrites the child via
+the regular-sender path (`__sequence(continues_on(just(), sched), child)`),
+which strips `item_types` and breaks `transform_each`. We added a small
+`fsx::on_queue` adapter (~80 LoC) in `examples/fsevents_wrapper.hpp` that
+wraps the receiver's env to expose `get_scheduler -> libdispatch_scheduler`
+without leaving the sequence-sender world. The demo composes via
+`fsx::on_queue(pool.get_scheduler(), ctx.watch(opts))`. The design doc
+anticipated this fallback (`docs/plans/2026-04-29-fsevents-libdispatch-redesign-design.md:249-252`).
+
 ---
 
 ## Task 10: Update `examples/fsevents_coro.cpp` to use `starts_on`

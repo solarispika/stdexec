@@ -20,6 +20,7 @@
 #include <CoreServices/CoreServices.h>
 #include <dispatch/dispatch.h>
 
+#include "exec/libdispatch_queue.hpp"
 #include "exec/sequence_senders.hpp"
 #include "stdexec/execution.hpp"
 
@@ -94,14 +95,9 @@ namespace fsx
    public:
     explicit fsevents_context(std::vector<std::string> __paths)
       : __paths_{std::move(__paths)}
-      , __queue_{dispatch_queue_create("fsx.fsevents", DISPATCH_QUEUE_SERIAL)}
     {}
 
-    ~fsevents_context()
-    {
-      if (__queue_)
-        dispatch_release(__queue_);
-    }
+    ~fsevents_context() = default;
 
     fsevents_context(const fsevents_context&)                    = delete;
     auto operator=(const fsevents_context&) -> fsevents_context& = delete;
@@ -129,7 +125,6 @@ namespace fsx
                            const FSEventStreamEventId* __ids) noexcept;
 
     std::vector<std::string>           __paths_;
-    dispatch_queue_t                   __queue_;
     std::atomic<__detail::__op_base*>  __active_{nullptr};
     std::atomic<FSEventStreamEventId>  __last_completed_id_{0};
   };
@@ -175,6 +170,7 @@ namespace fsx
       fsevents_context*                 __ctx_;
       watch_options                     __opts_;
       _Rcvr                             __rcvr_;
+      dispatch_queue_t                  __queue_{nullptr};
       FSEventStreamRef                  __stream_{nullptr};
       std::atomic<bool>                 __stop_requested_{false};
       std::binary_semaphore             __delivery_done_{0};
@@ -184,11 +180,27 @@ namespace fsx
       std::optional<__stop_callback_t>  __stop_cb_;
       std::unique_ptr<__next_op_t>      __next_op_;
 
+      static auto __make_internal_queue(_Rcvr const & __r) -> dispatch_queue_t
+      {
+        auto __sch  = stdexec::get_scheduler(stdexec::get_env(__r));
+        auto __attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+                                                              QOS_CLASS_UNSPECIFIED,
+                                                              0);
+        return dispatch_queue_create_with_target("fsx.fsevents", __attr, __sch.native_handle());
+      }
+
       explicit __op(fsevents_context* __c, watch_options __o, _Rcvr __r)
         : __ctx_{__c}
         , __opts_{__o}
         , __rcvr_{std::move(__r)}
-      {}
+        , __queue_{__make_internal_queue(__rcvr_)}
+      { }
+
+      ~__op()
+      {
+        if (__queue_)
+          dispatch_release(__queue_);
+      }
 
       void start() & noexcept
       {
@@ -244,7 +256,7 @@ namespace fsx
           return;
         }
 
-        FSEventStreamSetDispatchQueue(__stream_, __ctx_->__queue_);
+        FSEventStreamSetDispatchQueue(__stream_, __queue_);
 
         if (!FSEventStreamStart(__stream_))
         {
@@ -305,7 +317,7 @@ namespace fsx
 
       void __schedule_finish_stopped() noexcept
       {
-        dispatch_async_f(__ctx_->__queue_, this, +[](void* __p) noexcept {
+        dispatch_async_f(__queue_, this, +[](void* __p) noexcept {
           auto* __o = static_cast<__op*>(__p);
           if (!__o->__stream_)
             return;
@@ -322,7 +334,7 @@ namespace fsx
           std::exception_ptr __ep;
         };
         auto* __c = new __closure{this, std::move(__ep)};
-        dispatch_async_f(__ctx_->__queue_, __c, +[](void* __p) noexcept {
+        dispatch_async_f(__queue_, __c, +[](void* __p) noexcept {
           std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
           if (!__cu->__o->__stream_)
             return;
@@ -353,7 +365,7 @@ namespace fsx
       // If a delivery is currently blocked, downstream stop_token propagation
       // is responsible for completing the next-sender (with set_stopped),
       // which unblocks the callback so this enqueued work can run.
-      dispatch_async_f(__self_->__ctx_->__queue_, __self_, +[](void* __p) noexcept {
+      dispatch_async_f(__self_->__queue_, __self_, +[](void* __p) noexcept {
         auto* __o = static_cast<__op*>(__p);
         if (!__o->__stream_)
           return;  // deliver() already finished us
@@ -416,12 +428,104 @@ namespace fsx
       watch_options     __opts_;
 
       template <stdexec::receiver _Rcvr>
+        requires stdexec::__callable<stdexec::get_scheduler_t,
+                                     stdexec::env_of_t<_Rcvr> const&>
+              && std::same_as<
+                   stdexec::__call_result_t<stdexec::get_scheduler_t,
+                                            stdexec::env_of_t<_Rcvr> const&>,
+                   exec::libdispatch_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
       }
     };
+
+    // ------------------------------------------------------------------
+    // on_queue: env-injection adapter that exposes a scheduler via
+    // get_scheduler in the receiver env.  Needed because stdexec::starts_on
+    // rewrites a sequence_sender child via the regular-sender path
+    // (__sequence(continues_on(just(), sched), child)) and loses item_types.
+    // ------------------------------------------------------------------
+    template <class _Sched>
+    struct __sched_prop
+    {
+      _Sched __sched_;
+
+      [[nodiscard]]
+      constexpr auto query(stdexec::get_scheduler_t) const noexcept -> _Sched
+      {
+        return __sched_;
+      }
+    };
+
+    template <class _Rcvr, class _Sched>
+    struct __on_queue_rcvr
+    {
+      using receiver_concept = stdexec::receiver_tag;
+
+      _Rcvr  __rcvr_;
+      _Sched __sched_;
+
+      [[nodiscard]]
+      auto get_env() const noexcept
+      {
+        return stdexec::env{__sched_prop<_Sched>{__sched_}, stdexec::get_env(__rcvr_)};
+      }
+
+      template <class _Item>
+      auto set_next(_Item&& __item) -> exec::next_sender_of_t<_Rcvr, _Item>
+      {
+        return exec::set_next(__rcvr_, static_cast<_Item&&>(__item));
+      }
+
+      void set_value() noexcept
+      {
+        stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_));
+      }
+
+      void set_stopped() noexcept
+      {
+        stdexec::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
+      }
+
+      template <class _E>
+      void set_error(_E&& __e) noexcept
+      {
+        stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), static_cast<_E&&>(__e));
+      }
+    };
+
+    template <class _Snd, class _Sched>
+    struct __on_queue_sender
+    {
+      using sender_concept        = exec::sequence_sender_tag;
+      using item_types            = exec::__item_types_of_t<_Snd>;
+      using completion_signatures = stdexec::__completion_signatures_of_t<_Snd>;
+
+      _Snd   __snd_;
+      _Sched __sched_;
+
+      template <stdexec::receiver _Rcvr>
+      auto
+      subscribe(_Rcvr __rcvr) && -> exec::subscribe_result_t<_Snd, __on_queue_rcvr<_Rcvr, _Sched>>
+      {
+        return exec::subscribe(static_cast<_Snd&&>(__snd_),
+                               __on_queue_rcvr<_Rcvr, _Sched>{std::move(__rcvr),
+                                                              std::move(__sched_)});
+      }
+    };
+
+    struct __on_queue_t
+    {
+      template <stdexec::scheduler _Sched, class _Snd>
+      auto operator()(_Sched __sched, _Snd __snd) const -> __on_queue_sender<_Snd, _Sched>
+      {
+        return {std::move(__snd), std::move(__sched)};
+      }
+    };
   }  // namespace __detail
+
+  inline constexpr __detail::__on_queue_t on_queue{};
 
   inline auto fsevents_context::watch(watch_options __opts) -> __detail::__watch_sender
   {

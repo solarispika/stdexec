@@ -60,11 +60,14 @@ auto main() -> int
   // sequence-sender pipeline.
   exec::static_thread_pool __pool{1};
   auto                     __sched = __pool.get_scheduler();
+  exec::libdispatch_queue  __fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.demo");
   stdexec::sync_wait(exec::when_any(
     stdexec::starts_on(__sched, stdexec::just())
       | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-    __ctx.watch()
-      | exec::transform_each(stdexec::then([&](fsx::fs_batch __b) {
+    fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
+      | exec::transform_each(stdexec::then(
+        [&](fsx::fs_batch __b)
+        {
           if (__b.must_rescan)
             std::printf("[rescan requested] flags imply MustScanSubDirs/RootChanged\n");
           for (const auto& __e : __b.events)
