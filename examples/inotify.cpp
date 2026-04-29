@@ -14,20 +14,91 @@
  * limitations under the License.
  */
 
+// Demo: consume the inotify sequence sender via a sender pipeline.
+
 #include "inotify_wrapper.hpp"
 
+#include "exec/linux/io_uring_context.hpp"
+#include "exec/sequence/ignore_all_values.hpp"
+#include "exec/sequence/transform_each.hpp"
+#include "exec/static_thread_pool.hpp"
+#include "exec/when_any.hpp"
+
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <thread>
 
 namespace fs = std::filesystem;
+using namespace std::chrono_literals;
 
 auto main() -> int
 {
-  auto __dir = fs::temp_directory_path() / "inx_smoke";
+  auto __dir = fs::temp_directory_path() / "inx_demo";
   fs::create_directories(__dir);
+  for (const auto& __e : fs::directory_iterator{__dir})
+  {
+    fs::remove_all(__e.path());
+  }
+  std::printf("watching %s\n", __dir.c_str());
+
+  exec::io_uring_context __ring;
+  std::thread            __driver{[&] { __ring.run_until_stopped(); }};
+
   inx::inotify_context __ctx{{__dir.string()}};
-  auto __p = __ctx.path_for(1);  // wd=1 if first watch, but unrelied-on
-  std::printf("inotify_context constructed; path_for(1) has_value=%d\n",
-              __p.has_value());
+
+  std::atomic<bool> __mutator_stop{false};
+  std::thread       __mutator{[&] {
+    for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+    {
+      std::this_thread::sleep_for(400ms);
+      std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
+      __f << "hello " << __i << "\n";
+    }
+  }};
+
+  exec::static_thread_pool __pool{1};
+  auto                     __sched = __pool.get_scheduler();
+  stdexec::sync_wait(exec::when_any(
+    stdexec::starts_on(__sched, stdexec::just())
+      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+    inx::on_ring(__ring.get_scheduler(), __ctx.watch())
+      | exec::transform_each(stdexec::then([&](inx::fs_batch __b) {
+          if (__b.overflow)
+          {
+            std::printf("[overflow] kernel inotify queue overflowed; rescan required\n");
+          }
+          for (const auto& __e : __b.events)
+          {
+            auto __p = __ctx.path_for(__e.wd);
+            std::printf("wd=%d mask=%#x cookie=%u root=%s name=%s\n",
+                        __e.wd,
+                        static_cast<unsigned>(__e.mask),
+                        static_cast<unsigned>(__e.cookie),
+                        __p ? __p->c_str() : "?",
+                        __e.name.c_str());
+
+            // Demo dynamic add_watch: when a subdirectory is created, follow it.
+            if ((__e.mask & IN_CREATE) && (__e.mask & IN_ISDIR) && __p)
+            {
+              try
+              {
+                __ctx.add_watch(*__p + "/" + __e.name);
+              }
+              catch (const std::system_error& __ex)
+              {
+                std::printf("add_watch failed: %s\n", __ex.what());
+              }
+            }
+          }
+        }))
+      | exec::ignore_all_values()));
+
+  __mutator_stop.store(true);
+  __mutator.join();
+  __ring.request_stop();
+  __driver.join();
   return 0;
 }
