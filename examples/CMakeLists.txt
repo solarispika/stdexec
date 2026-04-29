@@ -87,6 +87,11 @@ if (WIN32)
   target_link_libraries(example.rdc
       PRIVATE STDEXEC::stdexec
               stdexec_executable_flags)
+
+  add_executable(example.rdc_pool rdc_pool.cpp)
+  target_link_libraries(example.rdc_pool
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags)
 endif ()
 
 foreach(example ${stdexec_examples})
