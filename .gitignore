@@ -16,3 +16,6 @@ callgrind.*
 a.out
 *.code-workspace
 .venv-codex
+
+# git worktrees managed by Claude Code
+.worktrees/
