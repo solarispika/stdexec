@@ -41,8 +41,11 @@ namespace experimental::execution::__win32
 {
   class windows_thread_pool
   {
-    struct attrs;
+   public:
     class scheduler;
+
+   private:
+    struct attrs;
     class schedule_sender;
     class schedule_op_base;
 
