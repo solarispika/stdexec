@@ -194,7 +194,7 @@ namespace experimental::execution
     libdispatch_queue(libdispatch_queue const &)                     = delete;
     auto operator=(libdispatch_queue const &) -> libdispatch_queue & = delete;
 
-    // Moved-from state: __q_ == nullptr, __owns_ == false. Dtor is a no-op.
+    // Moved-from state: __q_ == nullptr; dtor is a no-op.
     // `priority` is left at its original value; native_handle() therefore falls
     // back to dispatch_get_global_queue(original_priority, 0), which is harmless
     // because callers should not use a moved-from object except to assign or
@@ -202,30 +202,26 @@ namespace experimental::execution
     libdispatch_queue(libdispatch_queue &&other) noexcept
       : priority(other.priority)
       , __q_(other.__q_)
-      , __owns_(other.__owns_)
     {
-      other.__q_    = nullptr;
-      other.__owns_ = false;
+      other.__q_ = nullptr;
     }
 
     auto operator=(libdispatch_queue &&other) noexcept -> libdispatch_queue &
     {
       if (this != &other)
       {
-        if (__owns_ && __q_)
+        if (__q_)
           dispatch_release(__q_);
-        __q_          = other.__q_;
-        priority      = other.priority;
-        __owns_       = other.__owns_;
-        other.__q_    = nullptr;
-        other.__owns_ = false;
+        __q_       = other.__q_;
+        priority   = other.priority;
+        other.__q_ = nullptr;
       }
       return *this;
     }
 
     ~libdispatch_queue()
     {
-      if (__owns_ && __q_)
+      if (__q_)
         dispatch_release(__q_);
     }
 
@@ -239,7 +235,7 @@ namespace experimental::execution
     {
       auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, qos, 0);
       auto raw  = dispatch_queue_create(label, attr);
-      return libdispatch_queue{raw, true};
+      return libdispatch_queue{raw};
     }
 
     static auto make_concurrent(char const *label, dispatch_qos_class_t qos = QOS_CLASS_DEFAULT)
@@ -247,7 +243,7 @@ namespace experimental::execution
     {
       auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, qos, 0);
       auto raw  = dispatch_queue_create(label, attr);
-      return libdispatch_queue{raw, true};
+      return libdispatch_queue{raw};
     }
 
     static auto make_serial(char const          *label,
@@ -256,7 +252,7 @@ namespace experimental::execution
     {
       auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, qos, 0);
       auto raw  = dispatch_queue_create_with_target(label, attr, target.native_handle());
-      return libdispatch_queue{raw, true};
+      return libdispatch_queue{raw};
     }
 
     static auto
@@ -266,19 +262,18 @@ namespace experimental::execution
     {
       auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, qos, 0);
       auto raw  = dispatch_queue_create_with_target(label, attr, target.native_handle());
-      return libdispatch_queue{raw, true};
+      return libdispatch_queue{raw};
     }
 
     static auto wrap(dispatch_queue_t q) -> libdispatch_queue
     {
       dispatch_retain(q);
-      return libdispatch_queue{q, true};
+      return libdispatch_queue{q};
     }
 
     void submit(__libdispatch::task_base *f)
     {
-      auto queue = __q_ ? __q_ : dispatch_get_global_queue(priority, 0);
-      dispatch_async_f(queue, f, reinterpret_cast<void (*)(void *) noexcept>(f->execute));
+      dispatch_async_f(native_handle(), f, reinterpret_cast<void (*)(void *) noexcept>(f->execute));
     }
 
     auto get_scheduler()
@@ -294,13 +289,11 @@ namespace experimental::execution
     int priority{DISPATCH_QUEUE_PRIORITY_DEFAULT};
 
    private:
-    libdispatch_queue(dispatch_queue_t q, bool owns) noexcept
+    explicit libdispatch_queue(dispatch_queue_t q) noexcept
       : __q_(q)
-      , __owns_(owns)
     { }
 
     dispatch_queue_t __q_{nullptr};
-    bool             __owns_{false};
   };
 
   inline auto libdispatch_scheduler::native_handle() const noexcept -> dispatch_queue_t
