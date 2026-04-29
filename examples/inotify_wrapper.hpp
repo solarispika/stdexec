@@ -97,7 +97,10 @@ namespace inx
     auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
 
    private:
-    template <class _Rcvr> friend struct __detail::__op;
+    template <class _Rcvr>
+    friend struct __detail::__op;
+    template <class _Rcvr>
+    friend struct __detail::__next_receiver;
     friend struct __detail::__watch_sender;
 
     int                                       __fd_{-1};
@@ -186,16 +189,31 @@ namespace inx
 
   inline auto inotify_context::remove_watch(int __wd) noexcept -> bool
   {
+    // First confirm we know about this wd. If not, nothing to remove.
     {
       std::lock_guard __lk{__map_mu_};
-      if (!__wd_to_path_.erase(__wd))
+      if (!__wd_to_path_.contains(__wd))
       {
         return false;
       }
     }
-    // inotify_rm_watch: kernel will emit IN_IGNORED for this wd; harmless if it
-    // races with our own erase above (the IN_IGNORED handler is a no-op then).
-    return ::inotify_rm_watch(__fd_, __wd) == 0;
+    // Call the kernel before erasing the map entry so path_for() reflects
+    // the live watch set: a concurrent path_for(wd) during this window
+    // returns the path (still true from the kernel's POV until rm_watch
+    // succeeds). EINVAL means the kernel has already auto-removed the wd
+    // (e.g. file unlinked) — treat that as success and clean up the stale
+    // map entry. The IN_IGNORED that follows hits an empty map slot
+    // (handler is a no-op then).
+    int __rc = ::inotify_rm_watch(__fd_, __wd);
+    if (__rc != 0 && errno != EINVAL)
+    {
+      return false;
+    }
+    {
+      std::lock_guard __lk{__map_mu_};
+      __wd_to_path_.erase(__wd);
+    }
+    return true;
   }
 
   inline auto inotify_context::path_for(int __wd) const -> std::optional<std::string>
