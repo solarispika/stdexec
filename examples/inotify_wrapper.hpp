@@ -180,6 +180,39 @@ namespace inx
     using __read_op_t =
       experimental::execution::__io_uring::__io_task_facade<__read_task>;
 
+    // Single-shot SQE that cancels another in-flight task by user_data.
+    // The target task's user_data is its __task* (set by io_uring_context).
+    struct __cancel_task
+    {
+      experimental::execution::__io_uring::__context* __ctx_;
+      void*                                           __target_user_data_;
+
+      auto context() noexcept
+        -> experimental::execution::__io_uring::__context&
+      {
+        return *__ctx_;
+      }
+
+      static constexpr auto ready() noexcept -> bool { return false; }
+
+      void submit(::io_uring_sqe& __sqe) noexcept
+      {
+        std::memset(&__sqe, 0, sizeof(__sqe));
+        __sqe.opcode = IORING_OP_ASYNC_CANCEL;
+        __sqe.addr   = reinterpret_cast<std::uint64_t>(__target_user_data_);
+      }
+
+      void complete(const ::io_uring_cqe&) noexcept
+      {
+        // Cancellation result is discarded — the target task's own complete()
+        // path is what drives finish_stopped. -ENOENT (already done) and
+        // 0 (cancelled) are both valid outcomes.
+      }
+    };
+
+    using __cancel_op_t =
+      experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
+
     template <class _Rcvr>
     struct __op : __op_base
     {
@@ -187,6 +220,32 @@ namespace inx
       using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
       using __next_receiver_t = __next_receiver<_Rcvr>;
       using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+
+      struct __on_stop_fn
+      {
+        __op* __self_;
+        void  operator()() noexcept
+        {
+          __self_->__stop_requested_.store(true, std::memory_order_release);
+          // If a read SQE is in flight, send a cancel SQE for it.
+          // __read_op_.has_value() is the simplest gate: it's set across
+          // the entire lifetime of an in-flight read, cleared only in
+          // __teardown(). Submitting a cancel against an already-completed
+          // read is harmless (kernel returns -ENOENT, complete() ignores it).
+          if (__self_->__read_op_)
+          {
+            // user_data is the address of the __task base of the facade.
+            void* __tgt = static_cast<
+              experimental::execution::__io_uring::__task*>(&*__self_->__read_op_);
+            __self_->__cancel_op_.emplace(std::in_place,
+                                          __cancel_task{__self_->__ring_, __tgt});
+            __self_->__cancel_op_->start();
+          }
+        }
+      };
+
+      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
+      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
 
       inotify_context*               __ctx_;
       watch_options                  __opts_;
@@ -199,7 +258,9 @@ namespace inx
       std::vector<std::uint64_t>     __buffer_;
       std::vector<fs_event>          __staging_;
       std::optional<__read_op_t>     __read_op_;
+      std::optional<__cancel_op_t>   __cancel_op_;
       std::unique_ptr<__next_op_t>   __next_op_;
+      std::optional<__stop_callback_t> __stop_cb_;
       std::atomic<bool>              __stop_requested_{false};
       std::exception_ptr             __error_;
 
@@ -226,6 +287,12 @@ namespace inx
           return;
         }
         __post_read();
+
+        // Register stop callback last: if the token is already in stop state
+        // it fires synchronously, which is now safe because the read is up.
+        // Same pattern as fsevents_wrapper / rdc_wrapper.
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
+                           __on_stop_fn{this});
       }
 
       void __post_read() noexcept
@@ -354,15 +421,18 @@ namespace inx
 
       void __teardown() noexcept
       {
-        // Today __teardown() is only reachable from __on_read_complete()'s
-        // chain (via __finish_stopped / __finish_error), so the in-flight
-        // read CQE has already been delivered and __read_op_ has no SQE
-        // left in the ring. Destroying it inline is safe.
-        // Task 3 (cancellation) adds a stop-callback path that can call
-        // __teardown from a different thread while a SQE is in flight —
-        // that path will need to schedule cleanup after the cancel CQE
-        // arrives, not run __read_op_.reset() inline.
+        // Drop the stop callback first so any in-flight invocation finishes
+        // before we destroy state it might touch (cancel SQE submission,
+        // __read_op_ pointer access). Same ordering as fsevents/rdc.
+        //
+        // After this point we are no longer reachable via the stop callback.
+        // We then destroy the next-op (in-flight downstream pipe), the
+        // read facade (now done — its CQE is what brought us here), and
+        // the cancel facade (also done if it was ever submitted). Finally
+        // release the active slot so a fresh subscribe can succeed.
+        __stop_cb_.reset();
         __next_op_.reset();
+        __cancel_op_.reset();
         __read_op_.reset();
         __ctx_->__active_.store(nullptr, std::memory_order_release);
       }
