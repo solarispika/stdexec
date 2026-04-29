@@ -89,6 +89,28 @@ if(STDEXEC_ENABLE_LIBDISPATCH)
         Catch2::Catch2WithMain
         PRIVATE
         common_test_settings)
+
+    # examples/da_wrapper.hpp uses the literal `stdexec::` namespace (same as
+    # examples/fsevents_wrapper.hpp), so this test deliberately does NOT link
+    # `common_test_settings` — that target hard-codes STDEXEC_NAMESPACE to
+    # std::execution, which would break user-facing example wrappers.
+    if(APPLE)
+        add_executable(test.da_wrapper test_da_wrapper.cpp)
+        set_target_properties(test.da_wrapper PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON
+            CXX_EXTENSIONS OFF)
+        target_include_directories(test.da_wrapper
+            PRIVATE ${CMAKE_SOURCE_DIR}/examples)
+        target_link_libraries(test.da_wrapper
+            PRIVATE
+            STDEXEC::stdexec
+            stdexec_executable_flags
+            Catch2::Catch2WithMain
+            "-framework DiskArbitration"
+            "-framework CoreFoundation")
+        catch_discover_tests(test.da_wrapper PROPERTIES TIMEOUT 30)
+    endif()
 endif()
 
 if(STDEXEC_ENABLE_ASIO)
