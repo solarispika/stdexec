@@ -31,13 +31,23 @@
 #endif
 #include <windows.h>
 // windows.h must come first
-#include <initguid.h>
 #include <cfgmgr32.h>
-#include <ioevent.h>          // GUID_DEVINTERFACE_VOLUME
+#include <initguid.h>
+#include <ioevent.h>  // GUID_DEVINTERFACE_VOLUME
 
 #ifndef GUID_DEVINTERFACE_VOLUME
-DEFINE_GUID(GUID_DEVINTERFACE_VOLUME, 0x53f5630dL, 0xb6bf, 0x11d0, 0x94, 0xf2,
-            0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b);
+DEFINE_GUID(GUID_DEVINTERFACE_VOLUME,
+            0x53f5630dL,
+            0xb6bf,
+            0x11d0,
+            0x94,
+            0xf2,
+            0x00,
+            0xa0,
+            0xc9,
+            0x1e,
+            0xfb,
+            0x8b);
 #endif
 
 #include "exec/on_scheduler.hpp"
@@ -163,7 +173,7 @@ namespace velx
       if (::WideCharToMultiByte(CP_UTF8, 0, __w, -1, __s.data(), __len, nullptr, nullptr) <= 0)
         return std::nullopt;
       // ASCII lowercase: \\?\Volume{guid} is pure ASCII.
-      for (auto & __c: __s)
+      for (auto& __c: __s)
         __c = static_cast<char>(std::tolower(static_cast<unsigned char>(__c)));
       return __s;
     }
@@ -176,18 +186,18 @@ namespace velx
       using __next_receiver_t = __next_receiver<_Rcvr>;
       using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
 
-      volume_context*    __ctx_;
-      watch_options      __opts_;
-      _Rcvr              __rcvr_;
+      volume_context*     __ctx_;
+      watch_options       __opts_;
+      _Rcvr               __rcvr_;
       TP_CALLBACK_ENVIRON __env_{};
-      HCMNOTIFICATION    __hnotify_{nullptr};
-      PTP_WORK           __drainer_work_{nullptr};
+      HCMNOTIFICATION     __hnotify_{nullptr};
+      PTP_WORK            __drainer_work_{nullptr};
 
       // MPSC queue (CM thread → pool drainer).
-      std::mutex                __queue_mu_;
-      std::vector<volume_event> __queue_;
+      std::mutex                      __queue_mu_;
+      std::vector<volume_event>       __queue_;
       std::unordered_set<std::string> __seen_arrivals_;  // shares __queue_mu_
-      std::atomic<bool>         __drainer_running_{false};
+      std::atomic<bool>               __drainer_running_{false};
 
       // Per-delivery handshake (drainer ↔ next_receiver). Same shape as DA.
       std::binary_semaphore __delivery_done_{0};
@@ -287,10 +297,10 @@ namespace velx
         auto* __self = static_cast<__op*>(__ctx_ptr);
 
         volume_event __vev{
-          .kind=(__action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
-            ? volume_event_kind::interface_arrival
-            : volume_event_kind::interface_removal,
-          .device_path=std::move(*__maybe_path),
+          .kind        = (__action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
+                         ? volume_event_kind::interface_arrival
+                         : volume_event_kind::interface_removal,
+          .device_path = std::move(*__maybe_path),
         };
 
         {
@@ -379,7 +389,8 @@ namespace velx
       void __schedule_cleanup(__finish_kind __k) noexcept
       {
         bool __expected = false;
-        if (!__cleanup_scheduled_.compare_exchange_strong(__expected, true,
+        if (!__cleanup_scheduled_.compare_exchange_strong(__expected,
+                                                          true,
                                                           std::memory_order_acq_rel))
           return;
         __finish_kind_ = __k;
@@ -432,9 +443,9 @@ namespace velx
 
         // (f) Move-out then complete. The receiver's set_stopped/set_error
         // may destroy *this* synchronously, so do not touch members afterwards.
-        auto             __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
-        auto             __ep         = std::move(__error_);
-        __finish_kind const __kind    = __finish_kind_;
+        auto                __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
+        auto                __ep         = std::move(__error_);
+        __finish_kind const __kind       = __finish_kind_;
 
         if (__kind == __finish_error)
         {
@@ -453,8 +464,8 @@ namespace velx
         if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
         {
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::runtime_error{
-                               "volume_context already has an active watch"}));
+                             std::make_exception_ptr(std::runtime_error{"volume_context already "
+                                                                        "has an active watch"}));
           return;
         }
 
@@ -465,10 +476,9 @@ namespace velx
           DWORD const __e = GetLastError();
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{
-                               static_cast<int>(__e),
-                               std::system_category(),
-                               "CreateThreadpoolWork"}));
+                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+                                                                       std::system_category(),
+                                                                       "CreateThreadpoolWork"}));
           return;
         }
 
@@ -479,26 +489,28 @@ namespace velx
           DWORD const __e = GetLastError();
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{
-                               static_cast<int>(__e),
-                               std::system_category(),
-                               "CreateThreadpoolWork (cleanup)"}));
+                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+                                                                       std::system_category(),
+                                                                       "CreateThreadpoolWork "
+                                                                       "(cleanup)"}));
           return;
         }
 
         // 3. Register CM notification.
         CM_NOTIFY_FILTER __filter{};
-        __filter.cbSize                          = sizeof(__filter);
-        __filter.FilterType                      = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
-        __filter.u.DeviceInterface.ClassGuid     = GUID_DEVINTERFACE_VOLUME;
+        __filter.cbSize                      = sizeof(__filter);
+        __filter.FilterType                  = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+        __filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_VOLUME;
         if (CONFIGRET const __cr =
               CM_Register_Notification(&__filter, this, &__cm_callback, &__hnotify_);
             __cr != CR_SUCCESS)
         {
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::runtime_error{
-                               "CM_Register_Notification failed (CR_" + std::to_string(__cr) + ")"}));
+                             std::make_exception_ptr(std::runtime_error{"CM_Register_Notification "
+                                                                        "failed (CR_"
+                                                                        + std::to_string(__cr)
+                                                                        + ")"}));
           return;
         }
 
@@ -510,32 +522,31 @@ namespace velx
         {
           ULONG __size = 0;
           if (CONFIGRET const __cr =
-                CM_Get_Device_Interface_List_SizeA(
-                  &__size,
-                  const_cast<GUID*>(&GUID_DEVINTERFACE_VOLUME),
-                  nullptr,
-                  CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+                CM_Get_Device_Interface_List_SizeA(&__size,
+                                                   const_cast<GUID*>(&GUID_DEVINTERFACE_VOLUME),
+                                                   nullptr,
+                                                   CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
               __cr != CR_SUCCESS)
           {
             // Treat enumeration failure as fatal in start(): roll back.
             // Resource cleanup (CM_Unregister, work items, env) is owned
             // by ~__op; just clear active and propagate the error.
             __ctx_->__active_.store(nullptr, std::memory_order_release);
-            stdexec::set_error(
-              static_cast<_Rcvr&&>(__rcvr_),
-              std::make_exception_ptr(std::runtime_error{
-                "CM_Get_Device_Interface_List_SizeA failed (CR_" + std::to_string(__cr) + ")"}));
+            stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+                               std::make_exception_ptr(std::runtime_error{"CM_Get_Device_Interface_"
+                                                                          "List_SizeA failed (CR_"
+                                                                          + std::to_string(__cr)
+                                                                          + ")"}));
             return;
           }
           std::vector<char> __buf(__size);
           GUID              __guid = GUID_DEVINTERFACE_VOLUME;
           if (CONFIGRET const __cr =
-                CM_Get_Device_Interface_ListA(
-                  &__guid,
-                  nullptr,
-                  __buf.data(),
-                  __size,
-                  CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+                CM_Get_Device_Interface_ListA(&__guid,
+                                              nullptr,
+                                              __buf.data(),
+                                              __size,
+                                              CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
               __cr == CR_BUFFER_SMALL)
           {
             // List grew between size and fetch — retry with the new size.
@@ -546,10 +557,11 @@ namespace velx
             // Resource cleanup (CM_Unregister, work items, env) is owned
             // by ~__op; just clear active and propagate the error.
             __ctx_->__active_.store(nullptr, std::memory_order_release);
-            stdexec::set_error(
-              static_cast<_Rcvr&&>(__rcvr_),
-              std::make_exception_ptr(std::runtime_error{
-                "CM_Get_Device_Interface_ListA failed (CR_" + std::to_string(__cr) + ")"}));
+            stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+                               std::make_exception_ptr(std::runtime_error{"CM_Get_Device_Interface_"
+                                                                          "ListA failed (CR_"
+                                                                          + std::to_string(__cr)
+                                                                          + ")"}));
             return;
           }
 
@@ -558,13 +570,13 @@ namespace velx
           // interleave dedup decisions mid-enumeration.
           {
             std::lock_guard __lk{__queue_mu_};
-            char const * __p   = __buf.data();
-            char const * __end = __buf.data() + __size;
+            char const *    __p   = __buf.data();
+            char const *    __end = __buf.data() + __size;
             while (__p < __end && *__p)
             {
               std::size_t const __n = std::strlen(__p);
               std::string       __path(__p, __n);
-              for (auto & __c: __path)
+              for (auto& __c: __path)
                 __c = static_cast<char>(std::tolower(static_cast<unsigned char>(__c)));
               if (__seen_arrivals_.insert(__path).second)
               {
@@ -587,8 +599,7 @@ namespace velx
         // (CM notification, work items, queue, drainer) is fully up. This
         // ordering is required for cleanup's WaitForThreadpoolWorkCallbacks
         // to be well-defined — see design doc Section 7.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                           __on_stop_fn{this});
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
       }
     };
 
