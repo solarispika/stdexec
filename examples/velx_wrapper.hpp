@@ -233,12 +233,31 @@ namespace velx
 
       ~__op() override
       {
-        // No-op. Resource teardown is owned by __teardown_and_complete,
-        // which runs in the cleanup work item. By the time this dtor runs,
-        // __teardown_and_complete has already released __hnotify_ and the
-        // pool environment is the only thing left — but the work items
-        // themselves were closed inside __teardown_and_complete too (see
-        // the additions in this step).
+        // Resource cleanup is owned by this dtor (RDC pool pattern). Two
+        // paths reach here:
+        //   (1) the cleanup work item already ran __teardown_and_complete,
+        //       which CM-unregistered + waited for the drainer + cleared
+        //       the active slot + completed the receiver. __hnotify_ is
+        //       null; this dtor only closes the work items and destroys
+        //       the env.
+        //   (2) start() returned set_error before the cleanup work item
+        //       was wired up (CAS-fail, CreateThreadpoolWork-fail, CM
+        //       register fail, enumeration fail). Whatever resources
+        //       start() acquired before failing are still held; this
+        //       dtor releases them.
+        if (__hnotify_)
+        {
+          CM_Unregister_Notification(__hnotify_);
+        }
+        if (__drainer_work_)
+        {
+          CloseThreadpoolWork(__drainer_work_);
+        }
+        if (__cleanup_work_)
+        {
+          CloseThreadpoolWork(__cleanup_work_);
+        }
+        DestroyThreadpoolEnvironment(&__env_);
       }
 
       static auto CALLBACK __cm_callback(HCMNOTIFICATION,
@@ -268,10 +287,10 @@ namespace velx
         auto* __self = static_cast<__op*>(__ctx_ptr);
 
         volume_event __vev{
-          (__action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
+          .kind=(__action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
             ? volume_event_kind::interface_arrival
             : volume_event_kind::interface_removal,
-          std::move(*__maybe_path),
+          .device_path=std::move(*__maybe_path),
         };
 
         {
@@ -281,8 +300,8 @@ namespace velx
             if (!__self->__seen_arrivals_.insert(__vev.device_path).second)
             {
               // Already known to us — drop. Closes the
-              // register-vs-enumerate race AND CM's own
-              // "we already saw this device on a prior arrival" idempotence.
+              // register-vs-enumerate race; also harmless if CM ever
+              // re-fires for the same device path.
               return ERROR_SUCCESS;
             }
           }
@@ -403,25 +422,6 @@ namespace velx
           WaitForThreadpoolWorkCallbacks(__drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
         }
 
-        // (c.5) Close pool work items. CloseThreadpoolWork is documented to
-        // defer the actual free until any in-flight callbacks return; we have
-        // already waited for the drainer in (c), so the cleanup work item is
-        // the only callback that could be in-flight, and CloseThreadpoolWork
-        // on the cleanup work itself is safe to call from inside that
-        // callback (it merely marks for free; the runtime drops the handle
-        // after we return).
-        if (__drainer_work_)
-        {
-          CloseThreadpoolWork(__drainer_work_);
-          __drainer_work_ = nullptr;
-        }
-        if (__cleanup_work_)
-        {
-          CloseThreadpoolWork(__cleanup_work_);
-          __cleanup_work_ = nullptr;
-        }
-        DestroyThreadpoolEnvironment(&__env_);
-
         // (d) Drainer should have reset __next_op_ on every iteration; this
         // is defensive in case the drainer exited via the stop_requested
         // branch without delivering.
@@ -477,9 +477,6 @@ namespace velx
         if (!__cleanup_work_)
         {
           DWORD const __e = GetLastError();
-          CloseThreadpoolWork(__drainer_work_);
-          __drainer_work_ = nullptr;
-          DestroyThreadpoolEnvironment(&__env_);
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
                              std::make_exception_ptr(std::system_error{
@@ -498,11 +495,6 @@ namespace velx
               CM_Register_Notification(&__filter, this, &__cm_callback, &__hnotify_);
             __cr != CR_SUCCESS)
         {
-          CloseThreadpoolWork(__cleanup_work_);
-          __cleanup_work_ = nullptr;
-          CloseThreadpoolWork(__drainer_work_);
-          __drainer_work_ = nullptr;
-          DestroyThreadpoolEnvironment(&__env_);
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
                              std::make_exception_ptr(std::runtime_error{
@@ -526,13 +518,8 @@ namespace velx
               __cr != CR_SUCCESS)
           {
             // Treat enumeration failure as fatal in start(): roll back.
-            CM_Unregister_Notification(__hnotify_);
-            __hnotify_ = nullptr;
-            CloseThreadpoolWork(__cleanup_work_);
-            __cleanup_work_ = nullptr;
-            CloseThreadpoolWork(__drainer_work_);
-            __drainer_work_ = nullptr;
-            DestroyThreadpoolEnvironment(&__env_);
+            // Resource cleanup (CM_Unregister, work items, env) is owned
+            // by ~__op; just clear active and propagate the error.
             __ctx_->__active_.store(nullptr, std::memory_order_release);
             stdexec::set_error(
               static_cast<_Rcvr&&>(__rcvr_),
@@ -556,13 +543,8 @@ namespace velx
           }
           else if (__cr != CR_SUCCESS)
           {
-            CM_Unregister_Notification(__hnotify_);
-            __hnotify_ = nullptr;
-            CloseThreadpoolWork(__cleanup_work_);
-            __cleanup_work_ = nullptr;
-            CloseThreadpoolWork(__drainer_work_);
-            __drainer_work_ = nullptr;
-            DestroyThreadpoolEnvironment(&__env_);
+            // Resource cleanup (CM_Unregister, work items, env) is owned
+            // by ~__op; just clear active and propagate the error.
             __ctx_->__active_.store(nullptr, std::memory_order_release);
             stdexec::set_error(
               static_cast<_Rcvr&&>(__rcvr_),
