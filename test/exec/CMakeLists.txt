@@ -111,6 +111,25 @@ if(STDEXEC_ENABLE_LIBDISPATCH)
     endif()
 endif()
 
+if(STDEXEC_ENABLE_WINDOWS_THREAD_POOL AND WIN32)
+    # examples/velx_wrapper.hpp uses the literal `stdexec::` namespace (same
+    # as examples/da_wrapper.hpp), so this test deliberately does NOT link
+    # `common_test_settings` — that target hard-codes STDEXEC_NAMESPACE to
+    # std::execution, which would break user-facing example wrappers.
+    add_executable(test.velx_wrapper test_velx_wrapper.cpp)
+    set_target_properties(test.velx_wrapper PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF)
+    target_link_libraries(test.velx_wrapper
+        PRIVATE
+        STDEXEC::stdexec
+        stdexec_executable_flags
+        Catch2::Catch2WithMain
+        cfgmgr32)
+    catch_discover_tests(test.velx_wrapper PROPERTIES TIMEOUT 30)
+endif()
+
 if(STDEXEC_ENABLE_ASIO)
     add_subdirectory(asio)
 endif()
