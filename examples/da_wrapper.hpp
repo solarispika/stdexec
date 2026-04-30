@@ -21,8 +21,8 @@
 // shared libdispatch-sequence-sender pattern documented in
 // `docs/plans/2026-04-29-da-libdispatch-sender-design.md`.
 
-#include <DiskArbitration/DiskArbitration.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <DiskArbitration/DiskArbitration.h>
 #include <dispatch/dispatch.h>
 
 #include "exec/libdispatch_queue.hpp"
@@ -55,10 +55,10 @@ namespace dax
   struct disk_event
   {
     disk_event_kind            kind;
-    std::string                bsd_name;     // e.g. "disk7s1"; empty if framework returns NULL
-    std::optional<std::string> volume_name;  // kDADiskDescriptionVolumeNameKey
-    std::optional<std::string> volume_path;  // kDADiskDescriptionVolumePathKey (POSIX path)
-    std::vector<std::string>   changed_keys; // populated only for description_changed
+    std::string                bsd_name;      // e.g. "disk7s1"; empty if framework returns NULL
+    std::optional<std::string> volume_name;   // kDADiskDescriptionVolumeNameKey
+    std::optional<std::string> volume_path;   // kDADiskDescriptionVolumePathKey (POSIX path)
+    std::vector<std::string>   changed_keys;  // populated only for description_changed
   };
 
   struct watch_options
@@ -100,7 +100,7 @@ namespace dax
   {
     struct __op_base
     {
-      virtual ~__op_base()                    = default;
+      virtual ~__op_base()                      = default;
       virtual void deliver(disk_event) noexcept = 0;
     };
 
@@ -116,10 +116,10 @@ namespace dax
     {
       if (!__s)
         return std::nullopt;
-      if (const char* __p = CFStringGetCStringPtr(__s, kCFStringEncodingUTF8))
+      if (char const * __p = CFStringGetCStringPtr(__s, kCFStringEncodingUTF8))
         return std::string{__p};
-      CFIndex __len = CFStringGetLength(__s);
-      CFIndex __max = CFStringGetMaximumSizeForEncoding(__len, kCFStringEncodingUTF8) + 1;
+      CFIndex     __len = CFStringGetLength(__s);
+      CFIndex     __max = CFStringGetMaximumSizeForEncoding(__len, kCFStringEncodingUTF8) + 1;
       std::string __buf(static_cast<size_t>(__max), '\0');
       if (!CFStringGetCString(__s, __buf.data(), __max, kCFStringEncodingUTF8))
         return std::nullopt;
@@ -138,14 +138,14 @@ namespace dax
       return __s;
     }
 
-    inline auto __make_disk_event(disk_event_kind __kind,
-                                  DADiskRef       __disk,
-                                  CFArrayRef      __changed_keys = nullptr) -> disk_event
+    inline auto
+    __make_disk_event(disk_event_kind __kind, DADiskRef __disk, CFArrayRef __changed_keys = nullptr)
+      -> disk_event
     {
       disk_event __ev;
       __ev.kind = __kind;
 
-      if (const char* __bsd = DADiskGetBSDName(__disk))
+      if (char const * __bsd = DADiskGetBSDName(__disk))
         __ev.bsd_name = std::string{__bsd};
 
       if (CFDictionaryRef __desc = DADiskCopyDescription(__disk))
@@ -182,8 +182,8 @@ namespace dax
 
     ~da_context() = default;
 
-    da_context(const da_context&)                    = delete;
-    auto operator=(const da_context&) -> da_context& = delete;
+    da_context(da_context const &)                    = delete;
+    auto operator=(da_context const &) -> da_context& = delete;
 
     auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
 
@@ -250,7 +250,7 @@ namespace dax
       std::optional<__stop_callback_t> __stop_cb_;
       std::unique_ptr<__next_op_t>     __next_op_;
 
-      static auto __make_internal_queue(_Rcvr const& __r) -> dispatch_queue_t
+      static auto __make_internal_queue(_Rcvr const & __r) -> dispatch_queue_t
       {
         auto __sch  = stdexec::get_scheduler(stdexec::get_env(__r));
         auto __attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
@@ -284,9 +284,7 @@ namespace dax
           __make_disk_event(disk_event_kind::disappeared, __disk));
       }
 
-      static void __on_desc_changed_cb(DADiskRef  __disk,
-                                       CFArrayRef __keys,
-                                       void*      __ctx) noexcept
+      static void __on_desc_changed_cb(DADiskRef __disk, CFArrayRef __keys, void* __ctx) noexcept
       {
         static_cast<__op_base*>(__ctx)->deliver(
           __make_disk_event(disk_event_kind::description_changed, __disk, __keys));
@@ -298,8 +296,7 @@ namespace dax
         if (!__session_)
         {
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(
-                               std::runtime_error{"DASessionCreate failed"}));
+                             std::make_exception_ptr(std::runtime_error{"DASessionCreate failed"}));
           return;
         }
 
@@ -309,8 +306,8 @@ namespace dax
           CFRelease(__session_);
           __session_ = nullptr;
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(
-                               std::runtime_error{"da_context already has an active watch"}));
+                             std::make_exception_ptr(std::runtime_error{"da_context already has an "
+                                                                        "active watch"}));
           return;
         }
 
@@ -326,23 +323,23 @@ namespace dax
           std::vector<CFStringRef> __string_values_to_release;
           __keys.reserve(__opts_.match.size());
           __values.reserve(__opts_.match.size());
-          for (const auto& [__k, __v] : __opts_.match)
+          for (auto const& [__k, __v]: __opts_.match)
           {
             CFStringRef __ks = CFStringCreateWithCString(kCFAllocatorDefault,
-                                                          __k.c_str(),
-                                                          kCFStringEncodingUTF8);
+                                                         __k.c_str(),
+                                                         kCFStringEncodingUTF8);
             if (!__ks)
               continue;
             CFTypeRef __vs = nullptr;
-            if (const bool* __b = std::get_if<bool>(&__v))
+            if (bool const * __b = std::get_if<bool>(&__v))
             {
               __vs = *__b ? kCFBooleanTrue : kCFBooleanFalse;
             }
             else
             {
               __vs = CFStringCreateWithCString(kCFAllocatorDefault,
-                                                std::get<std::string>(__v).c_str(),
-                                                kCFStringEncodingUTF8);
+                                               std::get<std::string>(__v).c_str(),
+                                               kCFStringEncodingUTF8);
               if (!__vs)
               {
                 CFRelease(__ks);
@@ -353,16 +350,15 @@ namespace dax
             __keys.push_back(__ks);
             __values.push_back(__vs);
           }
-          __match_dict_ = CFDictionaryCreate(
-            kCFAllocatorDefault,
-            reinterpret_cast<const void**>(__keys.data()),
-            __values.data(),
-            static_cast<CFIndex>(__keys.size()),
-            &kCFTypeDictionaryKeyCallBacks,
-            &kCFTypeDictionaryValueCallBacks);
-          for (CFStringRef __ks : __keys)
+          __match_dict_ = CFDictionaryCreate(kCFAllocatorDefault,
+                                             reinterpret_cast<void const **>(__keys.data()),
+                                             __values.data(),
+                                             static_cast<CFIndex>(__keys.size()),
+                                             &kCFTypeDictionaryKeyCallBacks,
+                                             &kCFTypeDictionaryValueCallBacks);
+          for (CFStringRef __ks: __keys)
             CFRelease(__ks);
-          for (CFStringRef __vs : __string_values_to_release)
+          for (CFStringRef __vs: __string_values_to_release)
             CFRelease(__vs);
         }
 
@@ -388,21 +384,20 @@ namespace dax
           {
             std::vector<CFStringRef> __cf_keys;
             __cf_keys.reserve(__opts_.description_keys.size());
-            for (const auto& __k : __opts_.description_keys)
+            for (auto const & __k: __opts_.description_keys)
             {
               if (CFStringRef __s = CFStringCreateWithCString(kCFAllocatorDefault,
                                                               __k.c_str(),
                                                               kCFStringEncodingUTF8))
                 __cf_keys.push_back(__s);
             }
-            __desc_keys_array_ = CFArrayCreate(
-              kCFAllocatorDefault,
-              reinterpret_cast<const void**>(__cf_keys.data()),
-              static_cast<CFIndex>(__cf_keys.size()),
-              &kCFTypeArrayCallBacks);
+            __desc_keys_array_ = CFArrayCreate(kCFAllocatorDefault,
+                                               reinterpret_cast<void const **>(__cf_keys.data()),
+                                               static_cast<CFIndex>(__cf_keys.size()),
+                                               &kCFTypeArrayCallBacks);
             // kCFTypeArrayCallBacks retains each element on insert; drop the
             // refs we owned from CFStringCreateWithCString.
-            for (CFStringRef __s : __cf_keys)
+            for (CFStringRef __s: __cf_keys)
               CFRelease(__s);
           }
           DARegisterDiskDescriptionChangedCallback(__session_,
@@ -417,8 +412,7 @@ namespace dax
 
         // Register stop callback last; if the token is already in stop state it
         // fires synchronously, which is now safe because the session is fully up.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                           __on_stop_fn{this});
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
       }
 
       // Called from the dispatch queue (from __on_*_cb).
@@ -431,9 +425,9 @@ namespace dax
 
         try
         {
-          __next_op_.reset(new __next_op_t(stdexec::connect(
-            exec::set_next(__rcvr_, stdexec::just(std::move(__ev))),
-            __next_receiver_t{this})));
+          __next_op_.reset(new __next_op_t(
+            stdexec::connect(exec::set_next(__rcvr_, stdexec::just(std::move(__ev))),
+                             __next_receiver_t{this})));
           stdexec::start(*__next_op_);
         }
         catch (...)
@@ -444,7 +438,7 @@ namespace dax
         }
 
         __delivery_done_.acquire();
-        const int __state = __delivery_state_;
+        int const __state = __delivery_state_;
         __next_op_.reset();
 
         if (__state == 2)
@@ -461,13 +455,17 @@ namespace dax
 
       void __schedule_finish_stopped() noexcept
       {
-        dispatch_async_f(__queue_, this, +[](void* __p) noexcept {
-          auto* __o = static_cast<__op*>(__p);
-          if (!__o->__session_)
-            return;
-          __o->__teardown_session();
-          stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
-        });
+        dispatch_async_f(
+          __queue_,
+          this,
+          +[](void* __p) noexcept
+          {
+            auto* __o = static_cast<__op*>(__p);
+            if (!__o->__session_)
+              return;
+            __o->__teardown_session();
+            stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+          });
       }
 
       void __schedule_finish_error(std::exception_ptr __ep) noexcept
@@ -478,13 +476,17 @@ namespace dax
           std::exception_ptr __ep;
         };
         auto* __c = new __closure{this, std::move(__ep)};
-        dispatch_async_f(__queue_, __c, +[](void* __p) noexcept {
-          std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
-          if (!__cu->__o->__session_)
-            return;
-          __cu->__o->__teardown_session();
-          stdexec::set_error(static_cast<_Rcvr&&>(__cu->__o->__rcvr_), std::move(__cu->__ep));
-        });
+        dispatch_async_f(
+          __queue_,
+          __c,
+          +[](void* __p) noexcept
+          {
+            std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
+            if (!__cu->__o->__session_)
+              return;
+            __cu->__o->__teardown_session();
+            stdexec::set_error(static_cast<_Rcvr&&>(__cu->__o->__rcvr_), std::move(__cu->__ep));
+          });
       }
 
       void __teardown_session() noexcept
@@ -540,13 +542,17 @@ namespace dax
       // downstream stop_token propagation completes the next-sender (with
       // set_stopped), which unblocks deliver() so this enqueued teardown can
       // run.
-      dispatch_async_f(__self_->__queue_, __self_, +[](void* __p) noexcept {
-        auto* __o = static_cast<__op*>(__p);
-        if (!__o->__session_)
-          return;  // deliver() already finished us
-        __o->__teardown_session();
-        stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
-      });
+      dispatch_async_f(
+        __self_->__queue_,
+        __self_,
+        +[](void* __p) noexcept
+        {
+          auto* __o = static_cast<__op*>(__p);
+          if (!__o->__session_)
+            return;  // deliver() already finished us
+          __o->__teardown_session();
+          stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+        });
     }
 
     template <class _Rcvr>
@@ -588,11 +594,11 @@ namespace dax
 
     struct __watch_sender
     {
-      using sender_concept        = exec::sequence_sender_tag;
-      using completion_signatures = stdexec::completion_signatures<stdexec::set_value_t(),
-                                                                   stdexec::set_stopped_t(),
-                                                                   stdexec::set_error_t(
-                                                                     std::exception_ptr)>;
+      using sender_concept = exec::sequence_sender_tag;
+      using completion_signatures =
+        stdexec::completion_signatures<stdexec::set_value_t(),
+                                       stdexec::set_stopped_t(),
+                                       stdexec::set_error_t(std::exception_ptr)>;
 
       using __item_sender_t = decltype(stdexec::just(std::declval<disk_event>()));
       using item_types      = exec::item_types<__item_sender_t>;
@@ -601,8 +607,7 @@ namespace dax
       watch_options __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
-                                           exec::libdispatch_scheduler>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::libdispatch_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};

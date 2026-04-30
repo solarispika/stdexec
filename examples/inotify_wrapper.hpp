@@ -47,24 +47,23 @@ namespace inx
 {
   struct fs_event
   {
-    int         wd;       // -1 means IN_Q_OVERFLOW (filtered from events span)
+    int           wd;  // -1 means IN_Q_OVERFLOW (filtered from events span)
     std::uint32_t mask;
     std::uint32_t cookie;
-    std::string name;
+    std::string   name;
   };
 
   struct fs_batch
   {
-    std::span<const fs_event> events;
+    std::span<fs_event const> events;
     bool                      overflow;
   };
 
   struct watch_options
   {
-    std::uint32_t mask = IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_MODIFY
-                       | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO | IN_MOVE_SELF
-                       | IN_CLOSE_WRITE;
-    std::size_t   buffer_size = 64 * 1024;
+    std::uint32_t mask = IN_CREATE | IN_DELETE | IN_DELETE_SELF | IN_MODIFY | IN_ATTRIB
+                       | IN_MOVED_FROM | IN_MOVED_TO | IN_MOVE_SELF | IN_CLOSE_WRITE;
+    std::size_t buffer_size = 64 * 1024;
   };
 
   class inotify_context;
@@ -72,23 +71,25 @@ namespace inx
   namespace __detail
   {
     struct __op_base;
-    template <class _Rcvr> struct __op;
-    template <class _Rcvr> struct __next_receiver;
+    template <class _Rcvr>
+    struct __op;
+    template <class _Rcvr>
+    struct __next_receiver;
     struct __watch_sender;
-  }
+  }  // namespace __detail
 
   class inotify_context
   {
    public:
     explicit inotify_context(std::vector<std::string> __initial_paths,
-                             std::uint32_t __default_mask = watch_options{}.mask);
+                             std::uint32_t            __default_mask = watch_options{}.mask);
     ~inotify_context();
 
-    inotify_context(const inotify_context&)                    = delete;
-    auto operator=(const inotify_context&) -> inotify_context& = delete;
+    inotify_context(inotify_context const &)                    = delete;
+    auto operator=(inotify_context const &) -> inotify_context& = delete;
 
-    auto add_watch(std::string_view __path,
-                   std::optional<std::uint32_t> __mask = std::nullopt) -> int;
+    auto
+    add_watch(std::string_view __path, std::optional<std::uint32_t> __mask = std::nullopt) -> int;
 
     auto remove_watch(int __wd) noexcept -> bool;
 
@@ -103,11 +104,11 @@ namespace inx
     friend struct __detail::__next_receiver;
     friend struct __detail::__watch_sender;
 
-    int                                       __fd_{-1};
-    std::uint32_t                             __default_mask_{};
-    mutable std::mutex                        __map_mu_;
-    std::unordered_map<int, std::string>      __wd_to_path_;
-    std::atomic<__detail::__op_base*>         __active_{nullptr};
+    int                                  __fd_{-1};
+    std::uint32_t                        __default_mask_{};
+    mutable std::mutex                   __map_mu_;
+    std::unordered_map<int, std::string> __wd_to_path_;
+    std::atomic<__detail::__op_base*>    __active_{nullptr};
   };
 
   // env-injection adapter — mirrors fsx::on_queue / rdcx::pool::on_pool.
@@ -117,10 +118,10 @@ namespace inx
   {
     struct __op_base
     {
-      virtual ~__op_base() = default;
-      virtual void __on_read_complete(const ::io_uring_cqe&) noexcept = 0;
-      virtual void __on_cancel_complete(const ::io_uring_cqe&) noexcept = 0;
-      virtual void __on_finalize_complete() noexcept                  = 0;
+      virtual ~__op_base()                                               = default;
+      virtual void __on_read_complete(::io_uring_cqe const &) noexcept   = 0;
+      virtual void __on_cancel_complete(::io_uring_cqe const &) noexcept = 0;
+      virtual void __on_finalize_complete() noexcept                     = 0;
     };
 
     template <class _Rcvr>
@@ -148,19 +149,21 @@ namespace inx
     // Thin __io_task base that defers to its outer __op via a back-pointer.
     struct __read_task
     {
-      __op_base*                     __outer_;
-      experimental::execution::__io_uring::__context*  __ctx_;
-      int                            __fd_;
-      void*                          __buf_;
-      std::size_t                    __buf_len_;
+      __op_base*                                      __outer_;
+      experimental::execution::__io_uring::__context* __ctx_;
+      int                                             __fd_;
+      void*                                           __buf_;
+      std::size_t                                     __buf_len_;
 
-      auto context() noexcept
-        -> experimental::execution::__io_uring::__context&
+      auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
         return *__ctx_;
       }
 
-      static constexpr auto ready() noexcept -> bool { return false; }
+      static constexpr auto ready() noexcept -> bool
+      {
+        return false;
+      }
 
       void submit(::io_uring_sqe& __sqe) noexcept
       {
@@ -173,14 +176,13 @@ namespace inx
         // user_data is set by __io_uring_context::submit().
       }
 
-      void complete(const ::io_uring_cqe& __cqe) noexcept
+      void complete(::io_uring_cqe const & __cqe) noexcept
       {
         __outer_->__on_read_complete(__cqe);
       }
     };
 
-    using __read_op_t =
-      experimental::execution::__io_uring::__io_task_facade<__read_task>;
+    using __read_op_t = experimental::execution::__io_uring::__io_task_facade<__read_task>;
 
     // Single-shot SQE that cancels another in-flight task by user_data.
     // The target task's user_data is its __task* (set by io_uring_context).
@@ -194,13 +196,15 @@ namespace inx
       experimental::execution::__io_uring::__context* __ctx_;
       void*                                           __target_user_data_;
 
-      auto context() noexcept
-        -> experimental::execution::__io_uring::__context&
+      auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
         return *__ctx_;
       }
 
-      static constexpr auto ready() noexcept -> bool { return false; }
+      static constexpr auto ready() noexcept -> bool
+      {
+        return false;
+      }
 
       void submit(::io_uring_sqe& __sqe) noexcept
       {
@@ -209,7 +213,7 @@ namespace inx
         __sqe.addr   = reinterpret_cast<std::uint64_t>(__target_user_data_);
       }
 
-      void complete(const ::io_uring_cqe& __cqe) noexcept
+      void complete(::io_uring_cqe const & __cqe) noexcept
       {
         // Cancellation result is discarded — the target task's own complete()
         // path is what drives the finish kind. -ENOENT (already done) and
@@ -219,8 +223,7 @@ namespace inx
       }
     };
 
-    using __cancel_op_t =
-      experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
+    using __cancel_op_t = experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
 
     // Deferred-finalize trampoline: submits an IORING_OP_NOP whose CQE arrives
     // back on the reactor in a fresh frame. This is the unique safe site for
@@ -234,13 +237,15 @@ namespace inx
       __op_base*                                      __outer_;
       experimental::execution::__io_uring::__context* __ctx_;
 
-      auto context() noexcept
-        -> experimental::execution::__io_uring::__context&
+      auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
         return *__ctx_;
       }
 
-      static constexpr auto ready() noexcept -> bool { return false; }
+      static constexpr auto ready() noexcept -> bool
+      {
+        return false;
+      }
 
       void submit(::io_uring_sqe& __sqe) noexcept
       {
@@ -248,14 +253,13 @@ namespace inx
         __sqe.opcode = IORING_OP_NOP;
       }
 
-      void complete(const ::io_uring_cqe&) noexcept
+      void complete(::io_uring_cqe const &) noexcept
       {
         __outer_->__on_finalize_complete();
       }
     };
 
-    using __finalize_op_t =
-      experimental::execution::__io_uring::__io_task_facade<__finalize_task>;
+    using __finalize_op_t = experimental::execution::__io_uring::__io_task_facade<__finalize_task>;
 
     template <class _Rcvr>
     struct __op : __op_base
@@ -265,12 +269,17 @@ namespace inx
       using __next_receiver_t = __next_receiver<_Rcvr>;
       using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
 
-      enum class __finish_kind { __none, __stopped, __error };
+      enum class __finish_kind
+      {
+        __none,
+        __stopped,
+        __error
+      };
 
       struct __on_stop_fn
       {
         __op* __self_;
-        void operator()() noexcept
+        void  operator()() noexcept
         {
           __self_->__stop_requested_.store(true, std::memory_order_release);
 
@@ -298,9 +307,10 @@ namespace inx
           // and the cancel CQE will both arrive, in that order, so finalize
           // must not run until both have been observed.
           __self_->__pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-          __self_->__cancel_op_.emplace(
-            std::in_place,
-            __cancel_task{static_cast<__op_base*>(__self_), __self_->__ring_, __tgt});
+          __self_->__cancel_op_.emplace(std::in_place,
+                                        __cancel_task{static_cast<__op_base*>(__self_),
+                                                      __self_->__ring_,
+                                                      __tgt});
           __self_->__cancel_op_->start();
         }
       };
@@ -308,42 +318,41 @@ namespace inx
       using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
       using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
 
-      inotify_context*               __ctx_;
-      watch_options                  __opts_;
-      _Rcvr                          __rcvr_;
-      experimental::execution::__io_uring::__context*  __ring_;
+      inotify_context*                                __ctx_;
+      watch_options                                   __opts_;
+      _Rcvr                                           __rcvr_;
+      experimental::execution::__io_uring::__context* __ring_;
       // uint64_t (alignment 8) guarantees the >=4-byte alignment that
       // ::inotify_event requires for its int wd / uint32_t fields.
       // std::vector<std::byte>::data() is only aligned to alignof(byte)==1
       // by the standard. Same trick as rdc_pool_wrapper.hpp's vector<DWORD>.
-      std::vector<std::uint64_t>     __buffer_;
-      std::vector<fs_event>          __staging_;
-      std::optional<__read_op_t>     __read_op_;
-      std::optional<__cancel_op_t>   __cancel_op_;
-      std::optional<__finalize_op_t> __finalize_op_;
-      std::unique_ptr<__next_op_t>   __next_op_;
+      std::vector<std::uint64_t>       __buffer_;
+      std::vector<fs_event>            __staging_;
+      std::optional<__read_op_t>       __read_op_;
+      std::optional<__cancel_op_t>     __cancel_op_;
+      std::optional<__finalize_op_t>   __finalize_op_;
+      std::unique_ptr<__next_op_t>     __next_op_;
       std::optional<__stop_callback_t> __stop_cb_;
-      std::atomic<bool>              __stop_requested_{false};
+      std::atomic<bool>                __stop_requested_{false};
       // CAS-gated single-shot flag: only the first caller of
       // __request_finalize submits the NOP. Subsequent callers no-op so the
       // counter dance and the finish_kind aren't disturbed.
-      std::atomic<bool>              __finalize_scheduled_{false};
+      std::atomic<bool> __finalize_scheduled_{false};
       // Shadow of the in-flight READ facade's __task*. Published (release) by
       // __post_read after emplace, read (acquire) by __on_stop_fn off-thread.
-      std::atomic<experimental::execution::__io_uring::__task*>
-                                     __read_user_data_{nullptr};
+      std::atomic<experimental::execution::__io_uring::__task*> __read_user_data_{nullptr};
       // Counts CQEs we expect: each posted READ + each posted CANCEL adds 1,
       // each delivered CQE subtracts 1. Finalize fires only when this reaches
       // 0 with a finish_kind set. Mirrors the __n_ops_ pattern used by
       // __stoppable_task_facade::__stop_operation in io_uring_context.hpp.
-      std::atomic<int>               __pending_cqes_{0};
+      std::atomic<int> __pending_cqes_{0};
       // __finish_kind_ is written by the unique winner of the
       // __finalize_scheduled_ CAS in __request_finalize, and read by
       // __finalize_and_complete (running in the NOP CQE's reactor frame).
       // The CAS publishes the write; the kernel's CQE delivery
       // happens-before the read. Plain (non-atomic) is therefore safe.
-      __finish_kind                  __finish_kind_{__finish_kind::__none};
-      std::exception_ptr             __error_;
+      __finish_kind      __finish_kind_{__finish_kind::__none};
+      std::exception_ptr __error_;
 
       explicit __op(inotify_context* __c, watch_options __o, _Rcvr __r)
         : __ctx_{__c}
@@ -353,8 +362,7 @@ namespace inx
         auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
         __ring_      = __sched.__context_;
         // Round buffer_size up to the next uint64_t.
-        __buffer_.resize((__opts_.buffer_size + sizeof(std::uint64_t) - 1)
-                         / sizeof(std::uint64_t));
+        __buffer_.resize((__opts_.buffer_size + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t));
       }
 
       void start() & noexcept
@@ -363,8 +371,8 @@ namespace inx
         if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
         {
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::runtime_error{
-                               "inotify_context already has an active watch"}));
+                             std::make_exception_ptr(std::runtime_error{"inotify_context already "
+                                                                        "has an active watch"}));
           return;
         }
         __post_read();
@@ -372,8 +380,7 @@ namespace inx
         // Register stop callback last: if the token is already in stop state
         // it fires synchronously, which is now safe because the read is up.
         // Same pattern as fsevents_wrapper / rdc_wrapper.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                           __on_stop_fn{this});
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
       }
 
       void __post_read() noexcept
@@ -395,17 +402,15 @@ namespace inx
         // decrement in __on_read_complete sees a non-zero pre-state.
         __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
         __read_op_.emplace(std::in_place,
-                           __read_task{
-                             static_cast<__op_base*>(this),
-                             __ring_,
-                             __ctx_->__fd_,
-                             __buffer_.data(),
-                             __buffer_.size() * sizeof(std::uint64_t)});
+                           __read_task{static_cast<__op_base*>(this),
+                                       __ring_,
+                                       __ctx_->__fd_,
+                                       __buffer_.data(),
+                                       __buffer_.size() * sizeof(std::uint64_t)});
         // Publish the new facade's __task* for __on_stop_fn to read with
         // release ordering. Must happen AFTER emplace and BEFORE start() so
         // a stop callback that fires concurrently sees the new pointer.
-        auto* __tgt = static_cast<
-          experimental::execution::__io_uring::__task*>(&*__read_op_);
+        auto* __tgt = static_cast<experimental::execution::__io_uring::__task*>(&*__read_op_);
         __read_user_data_.store(__tgt, std::memory_order_release);
         __read_op_->start();
       }
@@ -418,21 +423,21 @@ namespace inx
       void __request_finalize(__finish_kind __k) noexcept
       {
         bool __expected = false;
-        if (!__finalize_scheduled_.compare_exchange_strong(
-              __expected, true, std::memory_order_acq_rel))
+        if (!__finalize_scheduled_.compare_exchange_strong(__expected,
+                                                           true,
+                                                           std::memory_order_acq_rel))
         {
           return;
         }
         __finish_kind_ = __k;
         __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-        __finalize_op_.emplace(
-          std::in_place,
-          __finalize_task{static_cast<__op_base*>(this), __ring_});
+        __finalize_op_.emplace(std::in_place,
+                               __finalize_task{static_cast<__op_base*>(this), __ring_});
         __finalize_op_->start();
       }
 
       // Called on the io_uring reactor thread.
-      void __on_read_complete(const ::io_uring_cqe& __cqe) noexcept override
+      void __on_read_complete(::io_uring_cqe const & __cqe) noexcept override
       {
         // The READ CQE is in. Clear the published shadow user_data so any
         // stop callback that fires from this point on does NOT submit a
@@ -448,8 +453,8 @@ namespace inx
           }
           else
           {
-            __error_ = std::make_exception_ptr(std::system_error{
-              -__cqe.res, std::system_category(), "inotify read"});
+            __error_ = std::make_exception_ptr(
+              std::system_error{-__cqe.res, std::system_category(), "inotify read"});
             __request_finalize(__finish_kind::__error);
           }
         }
@@ -460,22 +465,24 @@ namespace inx
           bool __overflow = false;
           // IN_Q_OVERFLOW arrives as a synthetic event with wd=-1; surface it
           // batch-level and remove it from the events span.
-          std::erase_if(__staging_, [&](const fs_event& __e) {
-            if (__e.wd == -1 && (__e.mask & IN_Q_OVERFLOW))
-            {
-              __overflow = true;
-              return true;
-            }
-            return false;
-          });
+          std::erase_if(__staging_,
+                        [&](fs_event const & __e)
+                        {
+                          if (__e.wd == -1 && (__e.mask & IN_Q_OVERFLOW))
+                          {
+                            __overflow = true;
+                            return true;
+                          }
+                          return false;
+                        });
 
           fs_batch __batch{__staging_, __overflow};
 
           try
           {
-            __next_op_.reset(new __next_op_t(stdexec::connect(
-              exec::set_next(__rcvr_, stdexec::just(__batch)),
-              __next_receiver_t{this})));
+            __next_op_.reset(
+              new __next_op_t(stdexec::connect(exec::set_next(__rcvr_, stdexec::just(__batch)),
+                                               __next_receiver_t{this})));
             stdexec::start(*__next_op_);
           }
           catch (...)
@@ -495,7 +502,7 @@ namespace inx
 
       // Called on the io_uring reactor thread when the cancel CQE lands.
       // Plain decrement — finalization is owned by __on_finalize_complete.
-      void __on_cancel_complete(const ::io_uring_cqe&) noexcept override
+      void __on_cancel_complete(::io_uring_cqe const &) noexcept override
       {
         __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
       }
@@ -516,14 +523,14 @@ namespace inx
       void __parse_into_staging(std::size_t __bytes) noexcept
       {
         __staging_.clear();
-        const auto* __raw = reinterpret_cast<const std::byte*>(__buffer_.data());
-        std::size_t __off = 0;
+        auto const * __raw = reinterpret_cast<std::byte const *>(__buffer_.data());
+        std::size_t  __off = 0;
         while (__off + sizeof(::inotify_event) <= __bytes)
         {
-          const auto* __ev = reinterpret_cast<const ::inotify_event*>(
-            __raw + __off);
-          std::size_t __record = sizeof(::inotify_event) + __ev->len;
-          if (__off + __record > __bytes) break;
+          auto const * __ev     = reinterpret_cast<::inotify_event const *>(__raw + __off);
+          std::size_t  __record = sizeof(::inotify_event) + __ev->len;
+          if (__off + __record > __bytes)
+            break;
 
           // IN_IGNORED: the kernel has dropped this watch. Clean wd→path map.
           if ((__ev->mask & IN_IGNORED) && __ev->wd >= 0)
@@ -538,8 +545,7 @@ namespace inx
             // name is NUL-padded; strlen gives the real size.
             __name.assign(__ev->name, ::strnlen(__ev->name, __ev->len));
           }
-          __staging_.push_back({__ev->wd, __ev->mask, __ev->cookie,
-                                std::move(__name)});
+          __staging_.push_back({__ev->wd, __ev->mask, __ev->cookie, std::move(__name)});
 
           __off += __record;
         }
@@ -648,10 +654,10 @@ namespace inx
     struct __watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
-      using completion_signatures = stdexec::completion_signatures<
-        stdexec::set_value_t(),
-        stdexec::set_stopped_t(),
-        stdexec::set_error_t(std::exception_ptr)>;
+      using completion_signatures =
+        stdexec::completion_signatures<stdexec::set_value_t(),
+                                       stdexec::set_stopped_t(),
+                                       stdexec::set_error_t(std::exception_ptr)>;
 
       using __item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
       using item_types      = exec::item_types<__item_sender_t>;
@@ -660,19 +666,18 @@ namespace inx
       watch_options    __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
-                                           exec::io_uring_scheduler>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::io_uring_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
       }
     };
-  }
+  }  // namespace __detail
 
   // ---------- inotify_context impl ----------
 
   inline inotify_context::inotify_context(std::vector<std::string> __initial_paths,
-                                          std::uint32_t __default_mask)
+                                          std::uint32_t            __default_mask)
     : __default_mask_{__default_mask}
   {
     __fd_ = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
@@ -682,7 +687,7 @@ namespace inx
     }
     try
     {
-      for (const auto& __p : __initial_paths)
+      for (auto const & __p: __initial_paths)
       {
         add_watch(__p);
       }
@@ -703,12 +708,11 @@ namespace inx
     }
   }
 
-  inline auto inotify_context::add_watch(std::string_view __path,
-                                         std::optional<std::uint32_t> __mask) -> int
+  inline auto
+  inotify_context::add_watch(std::string_view __path, std::optional<std::uint32_t> __mask) -> int
   {
     std::string __zpath{__path};  // inotify_add_watch needs NUL-terminated
-    int __wd = ::inotify_add_watch(__fd_, __zpath.c_str(),
-                                   __mask.value_or(__default_mask_));
+    int __wd = ::inotify_add_watch(__fd_, __zpath.c_str(), __mask.value_or(__default_mask_));
     if (__wd < 0)
     {
       throw std::system_error{errno, std::system_category(), "inotify_add_watch"};
@@ -752,7 +756,7 @@ namespace inx
   inline auto inotify_context::path_for(int __wd) const -> std::optional<std::string>
   {
     std::lock_guard __lk{__map_mu_};
-    auto __it = __wd_to_path_.find(__wd);
+    auto            __it = __wd_to_path_.find(__wd);
     if (__it == __wd_to_path_.end())
     {
       return std::nullopt;

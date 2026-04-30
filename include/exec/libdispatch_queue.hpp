@@ -291,7 +291,7 @@ namespace experimental::execution
    private:
     explicit libdispatch_queue(dispatch_queue_t q) noexcept
       : __q_(q)
-    { }
+    {}
 
     dispatch_queue_t __q_{nullptr};
   };

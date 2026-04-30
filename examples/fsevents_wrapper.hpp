@@ -47,7 +47,7 @@ namespace fsx
 
   struct fs_batch
   {
-    std::span<const fs_event> events;
+    std::span<fs_event const> events;
     FSEventStreamEventId      last_id;
     bool                      had_drops;
     bool                      must_rescan;
@@ -58,15 +58,15 @@ namespace fsx
                                                      | kFSEventStreamEventFlagKernelDropped
                                                      | kFSEventStreamEventFlagRootChanged;
 
-  inline auto is_drop_notice(const fs_event& __e) noexcept -> bool
+  inline auto is_drop_notice(fs_event const & __e) noexcept -> bool
   {
     return (__e.flags & kDropMask) != 0;
   }
 
   struct watch_options
   {
-    FSEventStreamEventId     since   = kFSEventStreamEventIdSinceNow;
-    CFAbsoluteTime           latency = 0.2;
+    FSEventStreamEventId     since        = kFSEventStreamEventIdSinceNow;
+    CFAbsoluteTime           latency      = 0.2;
     FSEventStreamCreateFlags create_flags = kFSEventStreamCreateFlagFileEvents
                                           | kFSEventStreamCreateFlagNoDefer
                                           | kFSEventStreamCreateFlagWatchRoot;
@@ -78,8 +78,8 @@ namespace fsx
   {
     struct __op_base
     {
-      virtual ~__op_base()                        = default;
-      virtual void deliver(fs_batch) noexcept     = 0;
+      virtual ~__op_base()                    = default;
+      virtual void deliver(fs_batch) noexcept = 0;
     };
 
     template <class _Rcvr>
@@ -100,8 +100,8 @@ namespace fsx
 
     ~fsevents_context() = default;
 
-    fsevents_context(const fsevents_context&)                    = delete;
-    auto operator=(const fsevents_context&) -> fsevents_context& = delete;
+    fsevents_context(fsevents_context const &)                    = delete;
+    auto operator=(fsevents_context const &) -> fsevents_context& = delete;
 
     auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
 
@@ -119,15 +119,15 @@ namespace fsx
     friend struct __detail::__watch_sender;
 
     static void __callback(ConstFSEventStreamRef,
-                           void* __ctx_ptr,
-                           size_t __num_events,
-                           void* __event_paths,
-                           const FSEventStreamEventFlags* __flags,
-                           const FSEventStreamEventId* __ids) noexcept;
+                           void*                           __ctx_ptr,
+                           size_t                          __num_events,
+                           void*                           __event_paths,
+                           FSEventStreamEventFlags const * __flags,
+                           FSEventStreamEventId const *    __ids) noexcept;
 
-    std::vector<std::string>           __paths_;
-    std::atomic<__detail::__op_base*>  __active_{nullptr};
-    std::atomic<FSEventStreamEventId>  __last_completed_id_{0};
+    std::vector<std::string>          __paths_;
+    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::atomic<FSEventStreamEventId> __last_completed_id_{0};
   };
 
   namespace __detail
@@ -168,18 +168,18 @@ namespace fsx
       using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
       using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
 
-      fsevents_context*                 __ctx_;
-      watch_options                     __opts_;
-      _Rcvr                             __rcvr_;
-      dispatch_queue_t                  __queue_{nullptr};
-      FSEventStreamRef                  __stream_{nullptr};
-      std::atomic<bool>                 __stop_requested_{false};
-      std::binary_semaphore             __delivery_done_{0};
-      int                               __delivery_state_{0};  // 1=value, 2=stopped, 3=error
-      std::exception_ptr                __error_;
-      FSEventStreamEventId              __batch_last_id_{};
-      std::optional<__stop_callback_t>  __stop_cb_;
-      std::unique_ptr<__next_op_t>      __next_op_;
+      fsevents_context*                __ctx_;
+      watch_options                    __opts_;
+      _Rcvr                            __rcvr_;
+      dispatch_queue_t                 __queue_{nullptr};
+      FSEventStreamRef                 __stream_{nullptr};
+      std::atomic<bool>                __stop_requested_{false};
+      std::binary_semaphore            __delivery_done_{0};
+      int                              __delivery_state_{0};  // 1=value, 2=stopped, 3=error
+      std::exception_ptr               __error_;
+      FSEventStreamEventId             __batch_last_id_{};
+      std::optional<__stop_callback_t> __stop_cb_;
+      std::unique_ptr<__next_op_t>     __next_op_;
 
       static auto __make_internal_queue(_Rcvr const & __r) -> dispatch_queue_t
       {
@@ -195,7 +195,7 @@ namespace fsx
         , __opts_{__o}
         , __rcvr_{std::move(__r)}
         , __queue_{__make_internal_queue(__rcvr_)}
-      { }
+      {}
 
       ~__op()
       {
@@ -212,14 +212,15 @@ namespace fsx
         }
         __ctx_->__last_completed_id_.store(__initial, std::memory_order_release);
 
-        CFMutableArrayRef __cfpaths = CFArrayCreateMutable(
-          kCFAllocatorDefault,
-          static_cast<CFIndex>(__ctx_->__paths_.size()),
-          &kCFTypeArrayCallBacks);
-        for (const auto& __p : __ctx_->__paths_)
+        CFMutableArrayRef __cfpaths = CFArrayCreateMutable(kCFAllocatorDefault,
+                                                           static_cast<CFIndex>(
+                                                             __ctx_->__paths_.size()),
+                                                           &kCFTypeArrayCallBacks);
+        for (auto const & __p: __ctx_->__paths_)
         {
-          CFStringRef __s =
-            CFStringCreateWithCString(kCFAllocatorDefault, __p.c_str(), kCFStringEncodingUTF8);
+          CFStringRef __s = CFStringCreateWithCString(kCFAllocatorDefault,
+                                                      __p.c_str(),
+                                                      kCFStringEncodingUTF8);
           CFArrayAppendValue(__cfpaths, __s);
           CFRelease(__s);
         }
@@ -240,8 +241,8 @@ namespace fsx
         if (!__stream_)
         {
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(
-                               std::runtime_error{"FSEventStreamCreate failed"}));
+                             std::make_exception_ptr(std::runtime_error{"FSEventStreamCreate "
+                                                                        "failed"}));
           return;
         }
 
@@ -250,10 +251,9 @@ namespace fsx
         {
           FSEventStreamRelease(__stream_);
           __stream_ = nullptr;
-          stdexec::set_error(
-            static_cast<_Rcvr&&>(__rcvr_),
-            std::make_exception_ptr(
-              std::runtime_error{"fsevents_context already has an active watch"}));
+          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+                             std::make_exception_ptr(std::runtime_error{"fsevents_context already "
+                                                                        "has an active watch"}));
           return;
         }
 
@@ -266,15 +266,14 @@ namespace fsx
           FSEventStreamRelease(__stream_);
           __stream_ = nullptr;
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(
-                               std::runtime_error{"FSEventStreamStart failed"}));
+                             std::make_exception_ptr(std::runtime_error{"FSEventStreamStart "
+                                                                        "failed"}));
           return;
         }
 
         // Register stop callback last; if the token is already in stop state it
         // fires synchronously, which is now safe because the stream is fully up.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                           __on_stop_fn{this});
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
       }
 
       // Called from the dispatch queue (from __callback).
@@ -288,9 +287,9 @@ namespace fsx
 
         try
         {
-          __next_op_.reset(new __next_op_t(stdexec::connect(
-            exec::set_next(__rcvr_, stdexec::just(__batch)),
-            __next_receiver_t{this})));
+          __next_op_.reset(
+            new __next_op_t(stdexec::connect(exec::set_next(__rcvr_, stdexec::just(__batch)),
+                                             __next_receiver_t{this})));
           stdexec::start(*__next_op_);
         }
         catch (...)
@@ -301,7 +300,7 @@ namespace fsx
         }
 
         __delivery_done_.acquire();
-        const int __state = __delivery_state_;
+        int const __state = __delivery_state_;
         __next_op_.reset();
 
         if (__state == 2)
@@ -318,13 +317,17 @@ namespace fsx
 
       void __schedule_finish_stopped() noexcept
       {
-        dispatch_async_f(__queue_, this, +[](void* __p) noexcept {
-          auto* __o = static_cast<__op*>(__p);
-          if (!__o->__stream_)
-            return;
-          __o->__teardown_stream();
-          stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
-        });
+        dispatch_async_f(
+          __queue_,
+          this,
+          +[](void* __p) noexcept
+          {
+            auto* __o = static_cast<__op*>(__p);
+            if (!__o->__stream_)
+              return;
+            __o->__teardown_stream();
+            stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+          });
       }
 
       void __schedule_finish_error(std::exception_ptr __ep) noexcept
@@ -335,13 +338,17 @@ namespace fsx
           std::exception_ptr __ep;
         };
         auto* __c = new __closure{this, std::move(__ep)};
-        dispatch_async_f(__queue_, __c, +[](void* __p) noexcept {
-          std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
-          if (!__cu->__o->__stream_)
-            return;
-          __cu->__o->__teardown_stream();
-          stdexec::set_error(static_cast<_Rcvr&&>(__cu->__o->__rcvr_), std::move(__cu->__ep));
-        });
+        dispatch_async_f(
+          __queue_,
+          __c,
+          +[](void* __p) noexcept
+          {
+            std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
+            if (!__cu->__o->__stream_)
+              return;
+            __cu->__o->__teardown_stream();
+            stdexec::set_error(static_cast<_Rcvr&&>(__cu->__o->__rcvr_), std::move(__cu->__ep));
+          });
       }
 
       void __teardown_stream() noexcept
@@ -366,13 +373,17 @@ namespace fsx
       // If a delivery is currently blocked, downstream stop_token propagation
       // is responsible for completing the next-sender (with set_stopped),
       // which unblocks the callback so this enqueued work can run.
-      dispatch_async_f(__self_->__queue_, __self_, +[](void* __p) noexcept {
-        auto* __o = static_cast<__op*>(__p);
-        if (!__o->__stream_)
-          return;  // deliver() already finished us
-        __o->__teardown_stream();
-        stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
-      });
+      dispatch_async_f(
+        __self_->__queue_,
+        __self_,
+        +[](void* __p) noexcept
+        {
+          auto* __o = static_cast<__op*>(__p);
+          if (!__o->__stream_)
+            return;  // deliver() already finished us
+          __o->__teardown_stream();
+          stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+        });
     }
 
     template <class _Rcvr>
@@ -416,11 +427,11 @@ namespace fsx
 
     struct __watch_sender
     {
-      using sender_concept        = exec::sequence_sender_tag;
-      using completion_signatures = stdexec::completion_signatures<stdexec::set_value_t(),
-                                                                   stdexec::set_stopped_t(),
-                                                                   stdexec::set_error_t(
-                                                                     std::exception_ptr)>;
+      using sender_concept = exec::sequence_sender_tag;
+      using completion_signatures =
+        stdexec::completion_signatures<stdexec::set_value_t(),
+                                       stdexec::set_stopped_t(),
+                                       stdexec::set_error_t(std::exception_ptr)>;
 
       using __item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
       using item_types      = exec::item_types<__item_sender_t>;
@@ -429,8 +440,7 @@ namespace fsx
       watch_options     __opts_;
 
       template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
-                                           exec::libdispatch_scheduler>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::libdispatch_scheduler>
       auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
       {
         return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
@@ -447,13 +457,12 @@ namespace fsx
     return {this, __opts};
   }
 
-  inline void fsevents_context::__callback(
-    ConstFSEventStreamRef,
-    void* __ctx_ptr,
-    size_t __num_events,
-    void* __event_paths,
-    const FSEventStreamEventFlags* __flags,
-    const FSEventStreamEventId* __ids) noexcept
+  inline void fsevents_context::__callback(ConstFSEventStreamRef,
+                                           void*                           __ctx_ptr,
+                                           size_t                          __num_events,
+                                           void*                           __event_paths,
+                                           FSEventStreamEventFlags const * __flags,
+                                           FSEventStreamEventId const *    __ids) noexcept
   {
     auto*  __self  = static_cast<__detail::__op_base*>(__ctx_ptr);
     auto** __paths = static_cast<char**>(__event_paths);
@@ -469,10 +478,9 @@ namespace fsx
       __staging.push_back({std::string{__paths[__i]}, __flags[__i], __ids[__i]});
       __last = std::max(__last, __ids[__i]);
       __drops |= (__flags[__i] & kDropMask) != 0;
-      __rescan |=
-        (__flags[__i]
-         & (kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged))
-        != 0;
+      __rescan |= (__flags[__i]
+                   & (kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged))
+               != 0;
     }
     fs_batch __batch{__staging, __last, __drops, __rescan};
     __self->deliver(__batch);

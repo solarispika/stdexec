@@ -79,7 +79,10 @@ namespace fsxchan
     }
 
     struct __pop_sender;
-    auto pop() -> __pop_sender { return {this}; }
+    auto pop() -> __pop_sender
+    {
+      return {this};
+    }
 
    private:
     struct __waiter_base
@@ -199,10 +202,10 @@ auto consume(fsxchan::chan<fs_batch_owned>& __ch) -> exec::task<int>
   int __count = 0;
   while (auto __maybe = co_await __ch.pop())
   {
-    const auto& __b = *__maybe;
+    auto const & __b = *__maybe;
     if (__b.must_rescan)
       std::printf("[coro] rescan requested\n");
-    for (const auto& __e : __b.events)
+    for (auto const & __e: __b.events)
     {
       if (fsx::is_drop_notice(__e))
       {
@@ -233,61 +236,67 @@ auto main() -> int
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
   auto __dir = fs::temp_directory_path() / "fsx_demo_coro";
   fs::create_directories(__dir);
-  for (const auto& __e : fs::directory_iterator{__dir})
+  for (auto const & __e: fs::directory_iterator{__dir})
     fs::remove_all(__e.path());
   __dir = fs::canonical(__dir);
   std::printf("watching %s\n", __dir.c_str());
 
-  fsx::fsevents_context        __ctx{{__dir.string()}};
+  fsx::fsevents_context         __ctx{{__dir.string()}};
   fsxchan::chan<fs_batch_owned> __ch;
 
   std::atomic<bool> __mutator_stop{false};
-  std::thread       __mutator{[&] {
-    for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
-    {
-      std::this_thread::sleep_for(400ms);
-      std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
-      __f << "hello " << __i << "\n";
-    }
-  }};
+  std::thread       __mutator{[&]
+                        {
+                          for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+                          {
+                            std::this_thread::sleep_for(400ms);
+                            std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
+                            __f << "hello " << __i << "\n";
+                          }
+                        }};
 
   exec::static_thread_pool __pool{2};
-  auto                     __sched = __pool.get_scheduler();
-  exec::libdispatch_queue  __fsx_pool =
-    exec::libdispatch_queue::make_concurrent("fsx.coro.producer");
+  auto                     __sched    = __pool.get_scheduler();
+  exec::libdispatch_queue  __fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.coro."
+                                                                                 "producer");
 
   // Run the producer on a worker thread (its push() blocks the dispatch queue
   // for backpressure), and consume() in the foreground. A 3s timer cancels
   // both via stop_token, then close() releases any blocked push.
   std::atomic<bool> __producer_done{false};
-  std::thread       __producer_thread{[&] {
-    auto __pipeline =
-      fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
-      | exec::transform_each(stdexec::then([&](fsx::fs_batch __b) {
-          std::printf("[prod] pushing batch last_id=%llu (%zu events)\n",
-                      static_cast<unsigned long long>(__b.last_id),
-                      __b.events.size());
-          __ch.push(fs_batch_owned{
-            {__b.events.begin(), __b.events.end()},
-            __b.last_id,
-            __b.had_drops,
-            __b.must_rescan});
-        }))
-      | exec::ignore_all_values();
-    stdexec::sync_wait(exec::when_any(
-      stdexec::starts_on(__sched, stdexec::just())
-        | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-      std::move(__pipeline)));
-    __producer_done.store(true);
-    __ch.close();  // wake any blocked consumer pop
-  }};
+  std::thread       __producer_thread{
+    [&]
+    {
+      auto __pipeline = fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
+                      | exec::transform_each(stdexec::then(
+                        [&](fsx::fs_batch __b)
+                        {
+                          std::printf("[prod] pushing batch last_id=%llu (%zu events)\n",
+                                      static_cast<unsigned long long>(__b.last_id),
+                                      __b.events.size());
+                          __ch.push(fs_batch_owned{
+                                  {__b.events.begin(), __b.events.end()},
+                            __b.last_id,
+                            __b.had_drops,
+                            __b.must_rescan
+                          });
+                        }))
+                      | exec::ignore_all_values();
+      stdexec::sync_wait(exec::when_any(stdexec::starts_on(__sched, stdexec::just())
+                                          | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+                                        std::move(__pipeline)));
+      __producer_done.store(true);
+      __ch.close();  // wake any blocked consumer pop
+    }};
 
-  auto [__count] =
-    stdexec::sync_wait(consume(__ch) | stdexec::then([](int __n) {
-                        std::printf("[main] consumer returned %d\n", __n);
-                        return __n;
-                      }))
-      .value();
+  auto [__count] = stdexec::sync_wait(consume(__ch)
+                                      | stdexec::then(
+                                        [](int __n)
+                                        {
+                                          std::printf("[main] consumer returned %d\n", __n);
+                                          return __n;
+                                        }))
+                     .value();
   (void) __count;
 
   __producer_thread.join();

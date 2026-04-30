@@ -107,8 +107,7 @@ namespace experimental::execution
     _Sched __sched_;
 
     template <stdexec::receiver _Rcvr>
-    auto subscribe(_Rcvr __rcvr) &&
-      -> subscribe_result_t<_Snd, __on_scheduler_rcvr<_Rcvr, _Sched>>
+    auto subscribe(_Rcvr __rcvr) && -> subscribe_result_t<_Snd, __on_scheduler_rcvr<_Rcvr, _Sched>>
     {
       return experimental::execution::subscribe(
         static_cast<_Snd&&>(__snd_),
@@ -129,8 +128,8 @@ namespace experimental::execution
   // the receiver's env (typically the one this adapter injected).
   template <class _Env, class _Sched>
   concept __env_has_scheduler =
-    stdexec::__callable<stdexec::get_scheduler_t, _Env const&>
-    && std::same_as<stdexec::__call_result_t<stdexec::get_scheduler_t, _Env const&>, _Sched>;
+    stdexec::__callable<stdexec::get_scheduler_t, _Env const &>
+    && std::same_as<stdexec::__call_result_t<stdexec::get_scheduler_t, _Env const &>, _Sched>;
 }  // namespace experimental::execution
 
 namespace exec = experimental::execution;

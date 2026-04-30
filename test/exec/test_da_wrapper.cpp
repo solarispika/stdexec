@@ -40,8 +40,7 @@ namespace
   // does not expose a libdispatch_scheduler. This mirrors the FSEvents wrapper
   // and is the wall against silently routing DA callbacks onto an unrelated
   // scheduler (e.g. static_thread_pool) when a user composes via starts_on.
-  static_assert(
-    !exec::__env_has_scheduler<stdexec::env<>, exec::libdispatch_scheduler>);
+  static_assert(!exec::__env_has_scheduler<stdexec::env<>, exec::libdispatch_scheduler>);
 
   TEST_CASE("dax::da_context watch can be cancelled before any DA event")
   {
@@ -54,11 +53,10 @@ namespace
     // Cancel via a short timer scheduled on a separate pool. Using an inline
     // `just()` would race with when_any's child startup (timer fires before the
     // watch is connected). Mirrors the fsevents demo's pattern.
-    stdexec::sync_wait(exec::when_any(
-      stdexec::starts_on(__timer_sched, stdexec::just())
-        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-      dax::on_queue(__pool.get_scheduler(), __ctx.watch())
-        | exec::ignore_all_values()));
+    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                                        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                                      dax::on_queue(__pool.get_scheduler(), __ctx.watch())
+                                        | exec::ignore_all_values()));
 
     // Reaching here means the watch's __on_stop_fn ran, the dispatch queue
     // drained, the DASession was released, and __active_ was cleared.
@@ -73,12 +71,13 @@ namespace
 
     dax::da_context __ctx;
 
-    auto __run_once = [&] {
-      stdexec::sync_wait(exec::when_any(
-        stdexec::starts_on(__timer_sched, stdexec::just())
-          | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-        dax::on_queue(__pool.get_scheduler(), __ctx.watch())
-          | exec::ignore_all_values()));
+    auto __run_once = [&]
+    {
+      stdexec::sync_wait(
+        exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                         | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                       dax::on_queue(__pool.get_scheduler(), __ctx.watch())
+                         | exec::ignore_all_values()));
     };
 
     __run_once();
@@ -98,21 +97,21 @@ namespace
     // Two concurrent subscriptions on the same context: one wins the
     // __active_ CAS, the other returns set_error from inside start().
     // when_any's error→stop semantics let us collect the failure.
-    auto __watch = [&] {
-      return dax::on_queue(__pool.get_scheduler(), __ctx.watch())
-           | exec::ignore_all_values();
+    auto __watch = [&]
+    {
+      return dax::on_queue(__pool.get_scheduler(), __ctx.watch()) | exec::ignore_all_values();
     };
 
     bool __saw_error = false;
     try
     {
-      stdexec::sync_wait(exec::when_any(
-        stdexec::starts_on(__timer_sched, stdexec::just())
-          | stdexec::then([] { std::this_thread::sleep_for(200ms); }),
-        __watch(),
-        __watch()));
+      stdexec::sync_wait(
+        exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                         | stdexec::then([] { std::this_thread::sleep_for(200ms); }),
+                       __watch(),
+                       __watch()));
     }
-    catch (const std::runtime_error&)
+    catch (std::runtime_error const &)
     {
       __saw_error = true;
     }
@@ -122,7 +121,7 @@ namespace
 
   TEST_CASE("dax::da_context watch with narrowed description_keys lifecycles cleanly")
   {
-    exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.desc_keys");
+    exec::libdispatch_queue __pool = exec::libdispatch_queue::make_concurrent("test.dax.desc_keys");
     exec::static_thread_pool __tp{1};
     auto                     __timer_sched = __tp.get_scheduler();
 
@@ -133,15 +132,21 @@ namespace
     // CFRelease path inside __op. We can't trigger description_changed
     // deterministically without real disk I/O, so we just verify the
     // cancellation round-trip with the new field.
-    stdexec::sync_wait(exec::when_any(
-      stdexec::starts_on(__timer_sched, stdexec::just())
-        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-      dax::on_queue(__pool.get_scheduler(),
-                    __ctx.watch({.watch_appeared             = false,
-                                 .watch_disappeared          = false,
-                                 .watch_description_changed  = true,
-                                 .description_keys = {"DAVolumeName", "DAVolumePath"}}))
-        | exec::ignore_all_values()));
+    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                                        | stdexec::then(
+                                          []
+                                          {
+                                            std::this_thread::sleep_for(50ms);
+    }),
+                                      dax::on_queue(__pool.get_scheduler(),
+                                                    __ctx.watch({.watch_appeared            = false,
+                                                                 .watch_disappeared         = false,
+                                                                 .watch_description_changed = true,
+                                                                 .description_keys = {"DAVolumeNam"
+                                                                                      "e",
+                                                                                      "DAVolumePat"
+                                                                                      "h"}}))
+                                        | exec::ignore_all_values()));
 
     SUCCEED("description_keys narrowing round-trip completed");
   }
@@ -163,11 +168,10 @@ namespace
     __opts.match["DAMediaWhole"] = true;
     __opts.match["DAVolumeKind"] = std::string{"apfs"};
 
-    stdexec::sync_wait(exec::when_any(
-      stdexec::starts_on(__timer_sched, stdexec::just())
-        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-      dax::on_queue(__pool.get_scheduler(), __ctx.watch(__opts))
-        | exec::ignore_all_values()));
+    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                                        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                                      dax::on_queue(__pool.get_scheduler(), __ctx.watch(__opts))
+                                        | exec::ignore_all_values()));
 
     SUCCEED("match filter round-trip completed");
   }

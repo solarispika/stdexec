@@ -67,7 +67,7 @@ namespace rdcx::pool
 
   struct fs_batch
   {
-    std::span<const fs_event> events;
+    std::span<fs_event const> events;
     bool                      overflow;
   };
 
@@ -112,8 +112,8 @@ namespace rdcx::pool
       : __path_{std::move(__path)}
     {}
 
-    rdc_context(const rdc_context&)                    = delete;
-    auto operator=(const rdc_context&) -> rdc_context& = delete;
+    rdc_context(rdc_context const &)                    = delete;
+    auto operator=(rdc_context const &) -> rdc_context& = delete;
 
     auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
 
@@ -228,10 +228,10 @@ namespace rdcx::pool
         if (__dir_ == INVALID_HANDLE_VALUE)
         {
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{
-                               static_cast<int>(GetLastError()),
-                               std::system_category(),
-                               "CreateFileW"}));
+                             std::make_exception_ptr(
+                               std::system_error{static_cast<int>(GetLastError()),
+                                                 std::system_category(),
+                                                 "CreateFileW"}));
           return;
         }
 
@@ -241,8 +241,8 @@ namespace rdcx::pool
           CloseHandle(__dir_);
           __dir_ = INVALID_HANDLE_VALUE;
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::runtime_error{
-                               "rdc_context already has an active watch"}));
+                             std::make_exception_ptr(std::runtime_error{"rdc_context already has "
+                                                                        "an active watch"}));
           return;
         }
 
@@ -254,10 +254,9 @@ namespace rdcx::pool
           CloseHandle(__dir_);
           __dir_ = INVALID_HANDLE_VALUE;
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{
-                               static_cast<int>(__e),
-                               std::system_category(),
-                               "CreateThreadpoolIo"}));
+                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+                                                                       std::system_category(),
+                                                                       "CreateThreadpoolIo"}));
           return;
         }
 
@@ -271,14 +270,13 @@ namespace rdcx::pool
           CloseHandle(__dir_);
           __dir_ = INVALID_HANDLE_VALUE;
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{
-                               static_cast<int>(__e),
-                               std::system_category(),
-                               "CreateThreadpoolWork"}));
+                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+                                                                       std::system_category(),
+                                                                       "CreateThreadpoolWork"}));
           return;
         }
 
-        const std::size_t __dwords = (__opts_.buffer_size + sizeof(DWORD) - 1) / sizeof(DWORD);
+        std::size_t const __dwords = (__opts_.buffer_size + sizeof(DWORD) - 1) / sizeof(DWORD);
         try
         {
           __buffer_.resize(__dwords);
@@ -298,8 +296,7 @@ namespace rdcx::pool
 
         // Register the stop callback before posting the first read so that
         // a stop request that races with start() can land on a valid handle.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                           __on_stop_fn{this});
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
 
         __post_read();
       }
@@ -341,10 +338,9 @@ namespace rdcx::pool
             }
             else
             {
-              __error_ = std::make_exception_ptr(std::system_error{
-                static_cast<int>(__err),
-                std::system_category(),
-                "ReadDirectoryChangesW"});
+              __error_ = std::make_exception_ptr(std::system_error{static_cast<int>(__err),
+                                                                   std::system_category(),
+                                                                   "ReadDirectoryChangesW"});
               __schedule_cleanup(__finish_error);
             }
             return;
@@ -362,9 +358,9 @@ namespace rdcx::pool
       // ---------- IO completion path (runs on a pool worker thread) -------
 
       static void CALLBACK __io_callback(PTP_CALLBACK_INSTANCE,
-                                         void*  __ctx_ptr,
-                                         void*  __ovl_ptr,
-                                         ULONG  __io_result,
+                                         void*     __ctx_ptr,
+                                         void*     __ovl_ptr,
+                                         ULONG     __io_result,
                                          ULONG_PTR __bytes,
                                          PTP_IO) noexcept
       {
@@ -379,27 +375,28 @@ namespace rdcx::pool
         }
         if (__io_result != NO_ERROR)
         {
-          __self->__error_ = std::make_exception_ptr(std::system_error{
-            static_cast<int>(__io_result),
-            std::system_category(),
-            "ReadDirectoryChangesW (completion)"});
+          __self->__error_ = std::make_exception_ptr(
+            std::system_error{static_cast<int>(__io_result),
+                              std::system_category(),
+                              "ReadDirectoryChangesW (completion)"});
           __self->__schedule_cleanup(__finish_error);
           return;
         }
 
-        const bool __overflow = (__bytes == 0);
+        bool const __overflow = (__bytes == 0);
         __self->__staging_.clear();
         if (!__overflow)
         {
-          const auto* __raw = reinterpret_cast<const std::byte*>(__self->__buffer_.data());
-          std::size_t __off = 0;
+          auto const * __raw = reinterpret_cast<std::byte const *>(__self->__buffer_.data());
+          std::size_t  __off = 0;
           while (__off < __bytes)
           {
-            const auto* __fni =
-              reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(__raw + __off);
-            const std::size_t __chars = __fni->FileNameLength / sizeof(WCHAR);
-            __self->__staging_.push_back(
-              {std::wstring{__fni->FileName, __chars}, __fni->Action});
+            auto const * __fni = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(__raw + __off);
+            std::size_t const __chars = __fni->FileNameLength / sizeof(WCHAR);
+            __self->__staging_.push_back({
+              std::wstring{__fni->FileName, __chars},
+              __fni->Action
+            });
             if (__fni->NextEntryOffset == 0)
               break;
             __off += __fni->NextEntryOffset;
@@ -410,9 +407,9 @@ namespace rdcx::pool
 
         try
         {
-          __self->__next_op_.reset(new __next_op_t(stdexec::connect(
-            exec::set_next(__self->__rcvr_, stdexec::just(__batch)),
-            __next_receiver_t{__self})));
+          __self->__next_op_.reset(new __next_op_t(
+            stdexec::connect(exec::set_next(__self->__rcvr_, stdexec::just(__batch)),
+                             __next_receiver_t{__self})));
           stdexec::start(*__self->__next_op_);
         }
         catch (...)
@@ -500,9 +497,9 @@ namespace rdcx::pool
 
         // Move receiver and error out before completing — the parent op
         // may destroy *this* synchronously inside the completion call.
-        auto __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
-        auto __ep         = std::move(__error_);
-        const auto __kind = __finish_kind_;
+        auto       __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
+        auto       __ep         = std::move(__error_);
+        auto const __kind       = __finish_kind_;
 
         if (__kind == __finish_error)
         {
@@ -565,11 +562,11 @@ namespace rdcx::pool
 
     struct __watch_sender
     {
-      using sender_concept        = exec::sequence_sender_tag;
-      using completion_signatures = stdexec::completion_signatures<stdexec::set_value_t(),
-                                                                   stdexec::set_stopped_t(),
-                                                                   stdexec::set_error_t(
-                                                                     std::exception_ptr)>;
+      using sender_concept = exec::sequence_sender_tag;
+      using completion_signatures =
+        stdexec::completion_signatures<stdexec::set_value_t(),
+                                       stdexec::set_stopped_t(),
+                                       stdexec::set_error_t(std::exception_ptr)>;
 
       using __item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
       using item_types      = exec::item_types<__item_sender_t>;

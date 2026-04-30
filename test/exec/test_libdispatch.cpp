@@ -23,7 +23,6 @@
 #include <utility>
 #include <vector>
 
-
 namespace
 {
   TEST_CASE("libdispatch queue should be able to process tasks")
