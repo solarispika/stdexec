@@ -328,6 +328,14 @@ The practical mitigation is to schedule a rescan after the initial
 `watch_tree` call, and to treat the watch as "best effort" for the first few
 milliseconds.
 
+You do **not** need to call `remove_watch` when a watched directory is
+deleted by the filesystem (or unmounted, or otherwise auto-removed by
+the kernel). The kernel emits `IN_DELETE_SELF` followed by
+`IN_IGNORED` for the affected `wd`; the wrapper's `IN_IGNORED` handler
+already erases the entry from the wd→path map under the mutex. Only
+call `remove_watch` when you have decided you no longer want a watch
+that is still alive.
+
 ## inotify quirks worth knowing
 
 | Quirk | Detail |

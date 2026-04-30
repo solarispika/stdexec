@@ -104,7 +104,7 @@ namespace inx
     friend struct __detail::__watch_sender;
 
     int                                       __fd_{-1};
-    std::uint32_t                             __default_mask_;
+    std::uint32_t                             __default_mask_{};
     mutable std::mutex                        __map_mu_;
     std::unordered_map<int, std::string>      __wd_to_path_;
     std::atomic<__detail::__op_base*>         __active_{nullptr};
@@ -270,9 +270,18 @@ namespace inx
       struct __on_stop_fn
       {
         __op* __self_;
-        void  operator()() noexcept
+        void operator()() noexcept
         {
           __self_->__stop_requested_.store(true, std::memory_order_release);
+
+          // Defensive: stop_callback semantics fire at most once, but if a
+          // future caller re-arms a stop source we'd double-emplace
+          // __cancel_op_. Guard against that.
+          if (__self_->__cancel_op_.has_value())
+          {
+            return;
+          }
+
           // Read the in-flight READ's user_data (its __task*) atomically.
           // We MUST NOT touch __read_op_ directly here — the reactor thread
           // may be in __post_read calling __read_op_.emplace, which destroys
@@ -328,9 +337,11 @@ namespace inx
       // 0 with a finish_kind set. Mirrors the __n_ops_ pattern used by
       // __stoppable_task_facade::__stop_operation in io_uring_context.hpp.
       std::atomic<int>               __pending_cqes_{0};
-      // Finish disposition decided by the read CQE; only consumed by the
-      // last-CQE-in callsite. Reactor-thread-only (read CQE and cancel CQE
-      // are both dispatched by the reactor's complete() loop), so non-atomic.
+      // __finish_kind_ is written by the unique winner of the
+      // __finalize_scheduled_ CAS in __request_finalize, and read by
+      // __finalize_and_complete (running in the NOP CQE's reactor frame).
+      // The CAS publishes the write; the kernel's CQE delivery
+      // happens-before the read. Plain (non-atomic) is therefore safe.
       __finish_kind                  __finish_kind_{__finish_kind::__none};
       std::exception_ptr             __error_;
 

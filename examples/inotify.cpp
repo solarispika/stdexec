@@ -24,7 +24,6 @@
 #include "exec/static_thread_pool.hpp"
 #include "exec/when_any.hpp"
 
-#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -49,9 +48,10 @@ auto main() -> int
 
   inx::inotify_context __ctx{{__dir.string()}};
 
-  std::atomic<bool> __mutator_stop{false};
-  std::thread       __mutator{[&] {
-    for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+  // jthread auto-stops + auto-joins on scope exit, so the mutator does
+  // not outlive __ctx / __dir even if sync_wait throws.
+  std::jthread __mutator{[&](std::stop_token __st) {
+    for (int __i = 0; !__st.stop_requested() && __i < 5; ++__i)
     {
       std::this_thread::sleep_for(400ms);
       std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
@@ -96,8 +96,6 @@ auto main() -> int
         }))
       | exec::ignore_all_values()));
 
-  __mutator_stop.store(true);
-  __mutator.join();
   __ring.request_stop();
   __driver.join();
   return 0;
