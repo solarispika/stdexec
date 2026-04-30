@@ -48,6 +48,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_VOLUME, 0x53f5630dL, 0xb6bf, 0x11d0, 0x94, 0xf2,
 #include <atomic>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -185,6 +186,7 @@ namespace velx
       // MPSC queue (CM thread → pool drainer).
       std::mutex                __queue_mu_;
       std::vector<volume_event> __queue_;
+      std::unordered_set<std::string> __seen_arrivals_;  // shares __queue_mu_
       std::atomic<bool>         __drainer_running_{false};
 
       // Per-delivery handshake (drainer ↔ next_receiver). Same shape as DA.
@@ -274,11 +276,23 @@ namespace velx
 
         {
           std::lock_guard __lk{__self->__queue_mu_};
+          if (__vev.kind == volume_event_kind::interface_arrival)
+          {
+            if (!__self->__seen_arrivals_.insert(__vev.device_path).second)
+            {
+              // Already known to us — drop. Closes the
+              // register-vs-enumerate race AND CM's own
+              // "we already saw this device on a prior arrival" idempotence.
+              return ERROR_SUCCESS;
+            }
+          }
+          else
+          {
+            __self->__seen_arrivals_.erase(__vev.device_path);
+          }
           __self->__queue_.push_back(std::move(__vev));
           if (!__self->__drainer_running_.exchange(true, std::memory_order_acq_rel))
           {
-            // Drainer was idle; submit one. (Task 3 will keep this same
-            // submission path; the cleanup-work-item indirection lands then.)
             SubmitThreadpoolWork(__self->__drainer_work_);
           }
         }
@@ -496,8 +510,95 @@ namespace velx
           return;
         }
 
-        // (Task 4 will insert the initial replay enumeration here, between
-        //  CM register and stop-callback registration.)
+        // Initial replay: enumerate volumes that are already present and
+        // synthesize arrival events for them. Dedupes against any CM
+        // arrival that fired between CM register and this enumeration via
+        // __seen_arrivals_ — see design doc Section 5.
+        for (;;)
+        {
+          ULONG __size = 0;
+          if (CONFIGRET const __cr =
+                CM_Get_Device_Interface_List_SizeA(
+                  &__size,
+                  const_cast<GUID*>(&GUID_DEVINTERFACE_VOLUME),
+                  nullptr,
+                  CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+              __cr != CR_SUCCESS)
+          {
+            // Treat enumeration failure as fatal in start(): roll back.
+            CM_Unregister_Notification(__hnotify_);
+            __hnotify_ = nullptr;
+            CloseThreadpoolWork(__cleanup_work_);
+            __cleanup_work_ = nullptr;
+            CloseThreadpoolWork(__drainer_work_);
+            __drainer_work_ = nullptr;
+            DestroyThreadpoolEnvironment(&__env_);
+            __ctx_->__active_.store(nullptr, std::memory_order_release);
+            stdexec::set_error(
+              static_cast<_Rcvr&&>(__rcvr_),
+              std::make_exception_ptr(std::runtime_error{
+                "CM_Get_Device_Interface_List_SizeA failed (CR_" + std::to_string(__cr) + ")"}));
+            return;
+          }
+          std::vector<char> __buf(__size);
+          GUID              __guid = GUID_DEVINTERFACE_VOLUME;
+          if (CONFIGRET const __cr =
+                CM_Get_Device_Interface_ListA(
+                  &__guid,
+                  nullptr,
+                  __buf.data(),
+                  __size,
+                  CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
+              __cr == CR_BUFFER_SMALL)
+          {
+            // List grew between size and fetch — retry with the new size.
+            continue;
+          }
+          else if (__cr != CR_SUCCESS)
+          {
+            CM_Unregister_Notification(__hnotify_);
+            __hnotify_ = nullptr;
+            CloseThreadpoolWork(__cleanup_work_);
+            __cleanup_work_ = nullptr;
+            CloseThreadpoolWork(__drainer_work_);
+            __drainer_work_ = nullptr;
+            DestroyThreadpoolEnvironment(&__env_);
+            __ctx_->__active_.store(nullptr, std::memory_order_release);
+            stdexec::set_error(
+              static_cast<_Rcvr&&>(__rcvr_),
+              std::make_exception_ptr(std::runtime_error{
+                "CM_Get_Device_Interface_ListA failed (CR_" + std::to_string(__cr) + ")"}));
+            return;
+          }
+
+          // Multi-string: NUL-separated, double-NUL terminated. Lock the
+          // queue mutex once for the whole batch so the CM callback can't
+          // interleave dedup decisions mid-enumeration.
+          {
+            std::lock_guard __lk{__queue_mu_};
+            char const * __p   = __buf.data();
+            char const * __end = __buf.data() + __size;
+            while (__p < __end && *__p)
+            {
+              std::size_t const __n = std::strlen(__p);
+              std::string       __path(__p, __n);
+              for (auto & __c: __path)
+                __c = static_cast<char>(std::tolower(static_cast<unsigned char>(__c)));
+              if (__seen_arrivals_.insert(__path).second)
+              {
+                __queue_.push_back({volume_event_kind::interface_arrival, std::move(__path)});
+              }
+              __p += __n + 1;
+            }
+            // Mark drainer_running_ true while still under the lock so a
+            // CM callback firing concurrently does not double-submit.
+            if (!__drainer_running_.exchange(true, std::memory_order_acq_rel))
+            {
+              SubmitThreadpoolWork(__drainer_work_);
+            }
+          }
+          break;
+        }
 
         // Register stop callback last. If the token is already in stop state
         // it fires synchronously here, but every resource it touches
