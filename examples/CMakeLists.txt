@@ -100,6 +100,12 @@ if (WIN32)
   target_link_libraries(example.rdc_pool
       PRIVATE STDEXEC::stdexec
               stdexec_executable_flags)
+
+  add_executable(example.velx velx.cpp)
+  target_link_libraries(example.velx
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              cfgmgr32)
 endif ()
 
 foreach(example ${stdexec_examples})
