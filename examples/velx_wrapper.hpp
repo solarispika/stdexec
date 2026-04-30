@@ -197,6 +197,28 @@ namespace velx
       std::exception_ptr           __error_;
       std::unique_ptr<__next_op_t> __next_op_;
 
+      struct __on_stop_fn
+      {
+        __op* __self_;
+        void  operator()() noexcept
+        {
+          __self_->__stop_requested_.store(true, std::memory_order_release);
+          __self_->__schedule_cleanup(__finish_stopped);
+          // The drainer will also observe __stop_requested_ on its next loop
+          // iteration; if it is currently mid-delivery the in-flight set_next
+          // chain shares the receiver's env (and thus its stop_token) and
+          // will propagate stop, releasing the semaphore via
+          // next_receiver::set_stopped (state==2).
+        }
+      };
+
+      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
+      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+
+      PTP_WORK                         __cleanup_work_{nullptr};
+      std::atomic<bool>                __cleanup_scheduled_{false};
+      std::optional<__stop_callback_t> __stop_cb_;
+
       explicit __op(volume_context* __c, watch_options __o, _Rcvr __r)
         : __ctx_{__c}
         , __opts_{__o}
@@ -209,16 +231,12 @@ namespace velx
 
       ~__op() override
       {
-        // Task 3 will move resource teardown into the cleanup work item.
-        // For Task 2 we destroy here as a fallback so the build is clean and
-        // a happy-path drainer-driven exit doesn't leak. start()'s rollback
-        // paths also rely on these being safe to call when the resource is
-        // null.
-        if (__hnotify_)
-          CM_Unregister_Notification(__hnotify_);
-        if (__drainer_work_)
-          CloseThreadpoolWork(__drainer_work_);
-        DestroyThreadpoolEnvironment(&__env_);
+        // No-op. Resource teardown is owned by __teardown_and_complete,
+        // which runs in the cleanup work item. By the time this dtor runs,
+        // __teardown_and_complete has already released __hnotify_ and the
+        // pool environment is the only thing left — but the work items
+        // themselves were closed inside __teardown_and_complete too (see
+        // the additions in this step).
       }
 
       static auto CALLBACK __cm_callback(HCMNOTIFICATION,
@@ -279,15 +297,13 @@ namespace velx
             std::lock_guard __lk{__self->__queue_mu_};
             if (__self->__stop_requested_.load(std::memory_order_acquire))
             {
-              // Task 3 will route this to schedule_cleanup; for Task 2 we
-              // just exit (no cleanup work item exists yet). The dtor will
-              // tidy up when __op is destroyed.
-              return;
+              __self->__drainer_running_.store(false, std::memory_order_release);
+              break;  // schedule_cleanup below
             }
             if (__self->__queue_.empty())
             {
               __self->__drainer_running_.store(false, std::memory_order_release);
-              return;
+              return;  // idle exit; CM callback re-arms us
             }
             __ev = std::move(__self->__queue_.front());
             __self->__queue_.erase(__self->__queue_.begin());
@@ -303,25 +319,116 @@ namespace velx
           }
           catch (...)
           {
-            __self->__error_           = std::current_exception();
-            __self->__delivery_state_  = 3;
+            __self->__error_          = std::current_exception();
+            __self->__delivery_state_ = 3;
             __self->__delivery_done_.release();
           }
 
           __self->__delivery_done_.acquire();
-          int const __state         = __self->__delivery_state_;
+          int const __state = __self->__delivery_state_;
           __self->__next_op_.reset();
 
-          if (__state == 2 || __state == 3)
+          if (__state == 2)
           {
-            // Task 3 will route through schedule_cleanup. Task 2 exits the
-            // drainer here; the user-receiver completion ALSO lands in Task 3
-            // (cleanup work item is what calls set_stopped/set_error). For
-            // now the demo will appear to hang because the receiver never
-            // completes — this is intentional; Task 3 is the real-runnable
-            // milestone.
+            __self->__schedule_cleanup(__finish_stopped);
             return;
           }
+          if (__state == 3)
+          {
+            __self->__schedule_cleanup(__finish_error);
+            return;
+          }
+        }
+        // Reached only via the stop_requested branch above.
+        __self->__schedule_cleanup(__finish_stopped);
+      }
+
+      void __schedule_cleanup(__finish_kind __k) noexcept
+      {
+        bool __expected = false;
+        if (!__cleanup_scheduled_.compare_exchange_strong(__expected, true,
+                                                          std::memory_order_acq_rel))
+          return;
+        __finish_kind_ = __k;
+        SubmitThreadpoolWork(__cleanup_work_);
+      }
+
+      static void CALLBACK __cleanup_callback(PTP_CALLBACK_INSTANCE,
+                                              void* __ctx_ptr,
+                                              PTP_WORK) noexcept
+      {
+        auto* __self = static_cast<__op*>(__ctx_ptr);
+        __self->__teardown_and_complete();
+      }
+
+      void __teardown_and_complete() noexcept
+      {
+        // (a) Drop the stop callback first so a late stop request cannot
+        // re-enter teardown while we are mid-cleanup.
+        __stop_cb_.reset();
+
+        // (b) Unregister the CM notification. This is the unique safe site:
+        // we are NOT in a CM callback frame (we are in a pool work item),
+        // so the API contract that "CM_Unregister_Notification cannot be
+        // called from inside a CM callback" is satisfied. The OrangeDrive
+        // reference needed a dedicated abandoned-thread for this; the
+        // cleanup work item plays that role here.
+        if (__hnotify_)
+        {
+          CM_Unregister_Notification(__hnotify_);
+          __hnotify_ = nullptr;
+        }
+
+        // (c) Wait for the drainer to drain. The drainer observes
+        // __stop_requested_ on its next loop iteration and returns; if it
+        // was idle the wait is a no-op. Calling
+        // WaitForThreadpoolWorkCallbacks on a *different* PTP_WORK from
+        // inside another PTP_WORK callback is documented-safe.
+        if (__drainer_work_)
+        {
+          WaitForThreadpoolWorkCallbacks(__drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
+        }
+
+        // (c.5) Close pool work items. CloseThreadpoolWork is documented to
+        // defer the actual free until any in-flight callbacks return; we have
+        // already waited for the drainer in (c), so the cleanup work item is
+        // the only callback that could be in-flight, and CloseThreadpoolWork
+        // on the cleanup work itself is safe to call from inside that
+        // callback (it merely marks for free; the runtime drops the handle
+        // after we return).
+        if (__drainer_work_)
+        {
+          CloseThreadpoolWork(__drainer_work_);
+          __drainer_work_ = nullptr;
+        }
+        if (__cleanup_work_)
+        {
+          CloseThreadpoolWork(__cleanup_work_);
+          __cleanup_work_ = nullptr;
+        }
+        DestroyThreadpoolEnvironment(&__env_);
+
+        // (d) Drainer should have reset __next_op_ on every iteration; this
+        // is defensive in case the drainer exited via the stop_requested
+        // branch without delivering.
+        __next_op_.reset();
+
+        // (e) Release the active slot.
+        __ctx_->__active_.store(nullptr, std::memory_order_release);
+
+        // (f) Move-out then complete. The receiver's set_stopped/set_error
+        // may destroy *this* synchronously, so do not touch members afterwards.
+        auto             __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
+        auto             __ep         = std::move(__error_);
+        __finish_kind const __kind    = __finish_kind_;
+
+        if (__kind == __finish_error)
+        {
+          stdexec::set_error(std::move(__local_rcvr), std::move(__ep));
+        }
+        else
+        {
+          stdexec::set_stopped(std::move(__local_rcvr));
         }
       }
 
@@ -351,6 +458,23 @@ namespace velx
           return;
         }
 
+        // 2b. Cleanup work item.
+        __cleanup_work_ = CreateThreadpoolWork(&__cleanup_callback, this, &__env_);
+        if (!__cleanup_work_)
+        {
+          DWORD const __e = GetLastError();
+          CloseThreadpoolWork(__drainer_work_);
+          __drainer_work_ = nullptr;
+          DestroyThreadpoolEnvironment(&__env_);
+          __ctx_->__active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+                             std::make_exception_ptr(std::system_error{
+                               static_cast<int>(__e),
+                               std::system_category(),
+                               "CreateThreadpoolWork (cleanup)"}));
+          return;
+        }
+
         // 3. Register CM notification.
         CM_NOTIFY_FILTER __filter{};
         __filter.cbSize                          = sizeof(__filter);
@@ -360,8 +484,11 @@ namespace velx
               CM_Register_Notification(&__filter, this, &__cm_callback, &__hnotify_);
             __cr != CR_SUCCESS)
         {
+          CloseThreadpoolWork(__cleanup_work_);
+          __cleanup_work_ = nullptr;
           CloseThreadpoolWork(__drainer_work_);
           __drainer_work_ = nullptr;
+          DestroyThreadpoolEnvironment(&__env_);
           __ctx_->__active_.store(nullptr, std::memory_order_release);
           stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
                              std::make_exception_ptr(std::runtime_error{
@@ -372,7 +499,13 @@ namespace velx
         // (Task 4 will insert the initial replay enumeration here, between
         //  CM register and stop-callback registration.)
 
-        // (Task 3 will register __stop_cb_ here.)
+        // Register stop callback last. If the token is already in stop state
+        // it fires synchronously here, but every resource it touches
+        // (CM notification, work items, queue, drainer) is fully up. This
+        // ordering is required for cleanup's WaitForThreadpoolWorkCallbacks
+        // to be well-defined — see design doc Section 7.
+        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
+                           __on_stop_fn{this});
       }
     };
 
