@@ -38,7 +38,7 @@ inx::inotify_context ctx{{"path/to/a", "path/to/b"}};
 inx::inotify_context ctx{{"path/to/dir"}, IN_CREATE | IN_DELETE};
 
 stdexec::sync_wait(
-    inx::on_ring(ring.get_scheduler(), ctx.watch())
+    exec::sequence_with_scheduler(ring.get_scheduler(), ctx.watch())
   | exec::transform_each(stdexec::then([&](inx::fs_batch b) {
         if (b.overflow) { /* rescan */ }
         for (const auto& e : b.events) {
@@ -101,7 +101,7 @@ Each `fs_event` carries:
 |---|---|---|---|
 | **Namespace** | `fsx` | `rdcx::pool` | `inx` |
 | **Reactor scheduler** | `exec::libdispatch_queue` | `exec::windows_thread_pool` | `exec::io_uring_context` |
-| **Env adapter** | `fsx::on_queue` | `rdcx::pool::on_pool` | `inx::on_ring` |
+| **Env adapter** | `exec::sequence_with_scheduler` | `exec::sequence_with_scheduler` | `exec::sequence_with_scheduler` |
 | **Source primitive** | `FSEventStreamCreate` | `ReadDirectoryChangesW` | `inotify_init1` + `IORING_OP_READ` |
 | **Recursive** | Kernel-side | Kernel-side | Caller-side (walk + `add_watch`) |
 | **Resume id** | `last_completed_id()` | None | None |
@@ -114,18 +114,17 @@ cancellation routed through a stop callback.
 ## Pool selection / scheduler
 
 The inotify wrapper does not own an io_uring ring. The ring is selected at the
-pipeline level via `inx::on_ring`:
+pipeline level via `exec::sequence_with_scheduler`:
 
 ```cpp
 exec::io_uring_context ring;
-stdexec::sync_wait(inx::on_ring(ring.get_scheduler(), ctx.watch()) | ...);
+stdexec::sync_wait(exec::sequence_with_scheduler(ring.get_scheduler(), ctx.watch()) | ...);
 ```
 
-`inx::on_ring` is an instance of the shared `exec::__on_scheduler_t` adapter
-(the same type used by `fsx::on_queue` on macOS and `rdcx::pool::on_pool` on
-Windows). It injects the scheduler into the receiver's env and preserves
-sequence-sender semantics that `stdexec::starts_on` / `stdexec::write_env`
-would currently collapse.
+`exec::sequence_with_scheduler` is the shared adapter from
+`include/exec/on_scheduler.hpp`, used by all five example wrappers. It injects
+the scheduler into the receiver's env and preserves sequence-sender semantics
+that `stdexec::starts_on` / `stdexec::write_env` would currently collapse.
 
 `__watch_sender::subscribe` is constrained at compile time to require an
 `exec::io_uring_scheduler` in the receiver's env:
@@ -140,8 +139,7 @@ auto subscribe(_Rcvr rcvr) const -> __op<_Rcvr>;
 Composing with any other scheduler type is a compile error — this prevents
 silently routing inotify completions through an unintended executor. See
 [`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md) for the
-full explanation; the same pattern is used by `fsx::on_queue` on macOS and
-`rdcx::pool::on_pool` on Windows.
+full explanation.
 
 ### How `__op` binds to the user's ring
 

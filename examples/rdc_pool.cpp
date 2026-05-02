@@ -85,26 +85,27 @@ auto main() -> int
 
   exec::static_thread_pool __timer_pool{1};
   auto                     __timer_sched = __timer_pool.get_scheduler();
-  stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
-                                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                                    rdcx::pool::on_pool(__wtp.get_scheduler(), __ctx.watch())
-                                      | exec::transform_each(stdexec::then(
-                                        [&](rdcx::pool::fs_batch __b)
-                                        {
-                                          if (__b.overflow)
-                                          {
-                                            std::printf("[overflow] kernel buffer outpaced user "
-                                                        "buffer; rescan required\n");
-                                            return;
-                                          }
-                                          for (auto const & __e: __b.events)
-                                          {
-                                            std::wprintf(L"action=%hs path=%ls\n",
-                                                         action_name(__e.action),
-                                                         __e.path.c_str());
-                                          }
-                                        }))
-                                      | exec::ignore_all_values()));
+  stdexec::sync_wait(
+    exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                     | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+                   exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch())
+                     | exec::transform_each(stdexec::then(
+                       [&](rdcx::pool::fs_batch __b)
+                       {
+                         if (__b.overflow)
+                         {
+                           std::printf("[overflow] kernel buffer outpaced user "
+                                       "buffer; rescan required\n");
+                           return;
+                         }
+                         for (auto const & __e: __b.events)
+                         {
+                           std::wprintf(L"action=%hs path=%ls\n",
+                                        action_name(__e.action),
+                                        __e.path.c_str());
+                         }
+                       }))
+                     | exec::ignore_all_values()));
 
   __mutator_stop.store(true);
   __mutator.join();

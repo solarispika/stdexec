@@ -53,10 +53,11 @@ namespace
     // Cancel via a short timer scheduled on a separate pool. Using an inline
     // `just()` would race with when_any's child startup (timer fires before the
     // watch is connected). Mirrors the fsevents demo's pattern.
-    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
-                                        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-                                      dax::on_queue(__pool.get_scheduler(), __ctx.watch())
-                                        | exec::ignore_all_values()));
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch())
+                       | exec::ignore_all_values()));
 
     // Reaching here means the watch's __on_stop_fn ran, the dispatch queue
     // drained, the DASession was released, and __active_ was cleared.
@@ -76,7 +77,7 @@ namespace
       stdexec::sync_wait(
         exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
                          | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-                       dax::on_queue(__pool.get_scheduler(), __ctx.watch())
+                       exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch())
                          | exec::ignore_all_values()));
     };
 
@@ -99,7 +100,8 @@ namespace
     // when_any's error→stop semantics let us collect the failure.
     auto __watch = [&]
     {
-      return dax::on_queue(__pool.get_scheduler(), __ctx.watch()) | exec::ignore_all_values();
+      return exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch())
+           | exec::ignore_all_values();
     };
 
     bool __saw_error = false;
@@ -132,21 +134,22 @@ namespace
     // CFRelease path inside __op. We can't trigger description_changed
     // deterministically without real disk I/O, so we just verify the
     // cancellation round-trip with the new field.
-    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
-                                        | stdexec::then(
-                                          []
-                                          {
-                                            std::this_thread::sleep_for(50ms);
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then(
+                         []
+                         {
+                           std::this_thread::sleep_for(50ms);
     }),
-                                      dax::on_queue(__pool.get_scheduler(),
-                                                    __ctx.watch({.watch_appeared            = false,
-                                                                 .watch_disappeared         = false,
-                                                                 .watch_description_changed = true,
-                                                                 .description_keys = {"DAVolumeNam"
-                                                                                      "e",
-                                                                                      "DAVolumePat"
-                                                                                      "h"}}))
-                                        | exec::ignore_all_values()));
+                     exec::sequence_with_scheduler(__pool.get_scheduler(),
+                                                   __ctx.watch({.watch_appeared            = false,
+                                                                .watch_disappeared         = false,
+                                                                .watch_description_changed = true,
+                                                                .description_keys = {"DAVolumeNam"
+                                                                                     "e",
+                                                                                     "DAVolumePat"
+                                                                                     "h"}}))
+                       | exec::ignore_all_values()));
 
     SUCCEED("description_keys narrowing round-trip completed");
   }
@@ -168,10 +171,11 @@ namespace
     __opts.match["DAMediaWhole"] = true;
     __opts.match["DAVolumeKind"] = std::string{"apfs"};
 
-    stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
-                                        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-                                      dax::on_queue(__pool.get_scheduler(), __ctx.watch(__opts))
-                                        | exec::ignore_all_values()));
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
 
     SUCCEED("match filter round-trip completed");
   }

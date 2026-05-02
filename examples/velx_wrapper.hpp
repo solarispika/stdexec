@@ -128,11 +128,6 @@ namespace velx
     std::atomic<__detail::__op_base*> __active_{nullptr};
   };
 
-  // env-injection adapter — mirrors fsx::on_queue / dax::on_queue /
-  // inx::on_ring / rdcx::pool::on_pool. Same `exec::__on_scheduler_t`
-  // instance type promoted in include/exec/on_scheduler.hpp.
-  inline constexpr exec::__on_scheduler_t on_pool{};
-
   namespace __detail
   {
     struct __op_base

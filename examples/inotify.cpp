@@ -62,44 +62,44 @@ auto main() -> int
 
   exec::static_thread_pool __pool{1};
   auto                     __sched = __pool.get_scheduler();
-  stdexec::sync_wait(exec::when_any(stdexec::starts_on(__sched, stdexec::just())
-                                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                                    inx::on_ring(__ring.get_scheduler(), __ctx.watch())
-                                      | exec::transform_each(stdexec::then(
-                                        [&](inx::fs_batch __b)
-                                        {
-                                          if (__b.overflow)
-                                          {
-                                            std::printf("[overflow] kernel inotify queue "
-                                                        "overflowed; rescan required\n");
-                                          }
-                                          for (auto const & __e: __b.events)
-                                          {
-                                            auto __p = __ctx.path_for(__e.wd);
-                                            std::printf("wd=%d mask=%#x cookie=%u root=%s "
-                                                        "name=%s\n",
-                                                        __e.wd,
-                                                        static_cast<unsigned>(__e.mask),
-                                                        static_cast<unsigned>(__e.cookie),
-                                                        __p ? __p->c_str() : "?",
-                                                        __e.name.c_str());
+  stdexec::sync_wait(
+    exec::when_any(stdexec::starts_on(__sched, stdexec::just())
+                     | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+                   exec::sequence_with_scheduler(__ring.get_scheduler(), __ctx.watch())
+                     | exec::transform_each(stdexec::then(
+                       [&](inx::fs_batch __b)
+                       {
+                         if (__b.overflow)
+                         {
+                           std::printf("[overflow] kernel inotify queue "
+                                       "overflowed; rescan required\n");
+                         }
+                         for (auto const & __e: __b.events)
+                         {
+                           auto __p = __ctx.path_for(__e.wd);
+                           std::printf("wd=%d mask=%#x cookie=%u root=%s "
+                                       "name=%s\n",
+                                       __e.wd,
+                                       static_cast<unsigned>(__e.mask),
+                                       static_cast<unsigned>(__e.cookie),
+                                       __p ? __p->c_str() : "?",
+                                       __e.name.c_str());
 
-                                            // Demo dynamic add_watch: when a subdirectory is created, follow it.
-                                            if ((__e.mask & IN_CREATE) && (__e.mask & IN_ISDIR)
-                                                && __p)
-                                            {
-                                              try
-                                              {
-                                                __ctx.add_watch(*__p + "/" + __e.name);
-                                              }
-                                              catch (std::system_error const & __ex)
-                                              {
-                                                std::printf("add_watch failed: %s\n", __ex.what());
-                                              }
-                                            }
-                                          }
-                                        }))
-                                      | exec::ignore_all_values()));
+                           // Demo dynamic add_watch: when a subdirectory is created, follow it.
+                           if ((__e.mask & IN_CREATE) && (__e.mask & IN_ISDIR) && __p)
+                           {
+                             try
+                             {
+                               __ctx.add_watch(*__p + "/" + __e.name);
+                             }
+                             catch (std::system_error const & __ex)
+                             {
+                               std::printf("add_watch failed: %s\n", __ex.what());
+                             }
+                           }
+                         }
+                       }))
+                     | exec::ignore_all_values()));
 
   __ring.request_stop();
   __driver.join();

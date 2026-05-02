@@ -111,9 +111,6 @@ namespace inx
     std::atomic<__detail::__op_base*>    __active_{nullptr};
   };
 
-  // env-injection adapter — mirrors fsx::on_queue / rdcx::pool::on_pool.
-  inline constexpr exec::__on_scheduler_t on_ring{};
-
   namespace __detail
   {
     struct __op_base

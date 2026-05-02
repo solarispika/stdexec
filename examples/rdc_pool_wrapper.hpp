@@ -589,7 +589,4 @@ namespace rdcx::pool
   {
     return {this, __opts};
   }
-
-  // See examples/sequence_sender_on_scheduler.md.
-  inline constexpr exec::__on_scheduler_t on_pool{};
 }  // namespace rdcx::pool

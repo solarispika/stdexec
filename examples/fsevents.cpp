@@ -62,33 +62,34 @@ auto main() -> int
   exec::static_thread_pool __pool{1};
   auto                     __sched    = __pool.get_scheduler();
   exec::libdispatch_queue  __fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.demo");
-  stdexec::sync_wait(exec::when_any(stdexec::starts_on(__sched, stdexec::just())
-                                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                                    fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
-                                      | exec::transform_each(stdexec::then(
-                                        [&](fsx::fs_batch __b)
-                                        {
-                                          if (__b.must_rescan)
-                                            std::printf("[rescan requested] flags imply "
-                                                        "MustScanSubDirs/RootChanged\n");
-                                          for (auto const & __e: __b.events)
-                                          {
-                                            if (fsx::is_drop_notice(__e))
-                                            {
-                                              std::printf("[drop notice] flags=%#x path=%s\n",
-                                                          static_cast<unsigned>(__e.flags),
-                                                          __e.path.c_str());
-                                              continue;
-                                            }
-                                            std::printf("event id=%llu flags=%#x path=%s\n",
-                                                        static_cast<unsigned long long>(__e.id),
-                                                        static_cast<unsigned>(__e.flags),
-                                                        __e.path.c_str());
-                                          }
-                                          std::printf("checkpoint id=%llu\n",
-                                                      static_cast<unsigned long long>(__b.last_id));
-                                        }))
-                                      | exec::ignore_all_values()));
+  stdexec::sync_wait(
+    exec::when_any(stdexec::starts_on(__sched, stdexec::just())
+                     | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+                   exec::sequence_with_scheduler(__fsx_pool.get_scheduler(), __ctx.watch())
+                     | exec::transform_each(stdexec::then(
+                       [&](fsx::fs_batch __b)
+                       {
+                         if (__b.must_rescan)
+                           std::printf("[rescan requested] flags imply "
+                                       "MustScanSubDirs/RootChanged\n");
+                         for (auto const & __e: __b.events)
+                         {
+                           if (fsx::is_drop_notice(__e))
+                           {
+                             std::printf("[drop notice] flags=%#x path=%s\n",
+                                         static_cast<unsigned>(__e.flags),
+                                         __e.path.c_str());
+                             continue;
+                           }
+                           std::printf("event id=%llu flags=%#x path=%s\n",
+                                       static_cast<unsigned long long>(__e.id),
+                                       static_cast<unsigned>(__e.flags),
+                                       __e.path.c_str());
+                         }
+                         std::printf("checkpoint id=%llu\n",
+                                     static_cast<unsigned long long>(__b.last_id));
+                       }))
+                     | exec::ignore_all_values()));
 
   __mutator_stop.store(true);
   __mutator.join();

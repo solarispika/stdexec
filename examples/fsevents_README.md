@@ -30,12 +30,13 @@ exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("my.pool
 fsx::fsevents_context ctx{{"/path/to/dir"}};
 
 stdexec::sync_wait(
-    fsx::on_queue(pool.get_scheduler(),
-                  ctx.watch({.since = kFSEventStreamEventIdSinceNow,
-                             .latency = 0.2,
-                             .create_flags = kFSEventStreamCreateFlagFileEvents
-                                           | kFSEventStreamCreateFlagNoDefer
-                                           | kFSEventStreamCreateFlagWatchRoot}))
+    exec::sequence_with_scheduler(
+        pool.get_scheduler(),
+        ctx.watch({.since = kFSEventStreamEventIdSinceNow,
+                   .latency = 0.2,
+                   .create_flags = kFSEventStreamCreateFlagFileEvents
+                                 | kFSEventStreamCreateFlagNoDefer
+                                 | kFSEventStreamCreateFlagWatchRoot}))
   | exec::transform_each(stdexec::then([](fsx::fs_batch b){ ... }))
   | exec::ignore_all_values());
 ```
@@ -48,11 +49,11 @@ a resume point.
 ## Queue selection / scheduler
 
 The wrapper does not own a dispatch queue. The queue is selected at the
-pipeline level via `fsx::on_queue`:
+pipeline level via `exec::sequence_with_scheduler`:
 
 ```cpp
 exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("...");
-sync_wait(fsx::on_queue(pool.get_scheduler(), ctx.watch(opts)) | ...);
+sync_wait(exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch(opts)) | ...);
 ```
 
 `__watch_sender::subscribe` is constrained at compile time to require a
@@ -60,15 +61,16 @@ sync_wait(fsx::on_queue(pool.get_scheduler(), ctx.watch(opts)) | ...);
 scheduler type is a compile error — this prevents silently falling back
 to a default queue when the caller intended e.g. a `static_thread_pool`.
 
-### Why `fsx::on_queue` instead of `stdexec::starts_on`?
+### Why `exec::sequence_with_scheduler` instead of `stdexec::starts_on`?
 
 Short version: `stdexec::starts_on` (and `stdexec::write_env`) collapse
 sequence-sender attributes today, so downstream `transform_each` loses
-the per-batch type. `fsx::on_queue` is a small adapter that does just
-the env injection while preserving sequence-sender semantics. See
+the per-batch type. `exec::sequence_with_scheduler` is a small shared
+adapter (in `include/exec/on_scheduler.hpp`) that does just the env
+injection while preserving sequence-sender semantics. See
 [`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
-for the full explanation; the same pattern is used by
-`rdcx::pool::on_pool` on the Windows side.
+for the full explanation; the same adapter is used by all the example
+wrappers (DA, inotify, RDC pool, velx).
 
 ### Internal serial queue
 

@@ -31,10 +31,11 @@ exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("my.pool
 dax::da_context ctx;
 
 stdexec::sync_wait(
-    dax::on_queue(pool.get_scheduler(),
-                  ctx.watch({.watch_appeared            = true,
-                             .watch_disappeared         = true,
-                             .watch_description_changed = false}))
+    exec::sequence_with_scheduler(
+        pool.get_scheduler(),
+        ctx.watch({.watch_appeared            = true,
+                   .watch_disappeared         = true,
+                   .watch_description_changed = false}))
   | exec::transform_each(stdexec::then([](dax::disk_event e){ ... }))
   | exec::ignore_all_values());
 ```
@@ -48,11 +49,11 @@ CFString contents during the callback).
 ## Queue selection / scheduler
 
 The wrapper does not own a dispatch queue. The queue is selected at the
-pipeline level via `dax::on_queue`:
+pipeline level via `exec::sequence_with_scheduler`:
 
 ```cpp
 exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("...");
-sync_wait(dax::on_queue(pool.get_scheduler(), ctx.watch(opts)) | ...);
+sync_wait(exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch(opts)) | ...);
 ```
 
 `__watch_sender::subscribe` is constrained at compile time to require a
@@ -60,16 +61,16 @@ sync_wait(dax::on_queue(pool.get_scheduler(), ctx.watch(opts)) | ...);
 scheduler type is a compile error — same posture as the FSEvents
 wrapper.
 
-### Why `dax::on_queue` instead of `stdexec::starts_on`?
+### Why `exec::sequence_with_scheduler` instead of `stdexec::starts_on`?
 
 Same reason as FSEvents: `stdexec::starts_on` (and `stdexec::write_env`)
 collapse sequence-sender attributes today, so downstream
-`transform_each` loses the per-event type. `dax::on_queue` is a thin
-adapter around the shared `exec::__on_scheduler_t` (defined in
-`include/exec/on_scheduler.hpp` and also used by `fsx::on_queue` and
-`rdcx::pool::on_pool`) that performs the env injection while
-preserving sequence-sender semantics. See
-`sequence_sender_on_scheduler.md` for the full explanation.
+`transform_each` loses the per-event type.
+`exec::sequence_with_scheduler` is the shared adapter (defined in
+`include/exec/on_scheduler.hpp`, used by all five example wrappers)
+that performs the env injection while preserving sequence-sender
+semantics. See `sequence_sender_on_scheduler.md` for the full
+explanation.
 
 ### Internal serial queue
 

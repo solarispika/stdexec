@@ -34,7 +34,7 @@ exec::windows_thread_pool pool{2, 4};
 velx::volume_context      ctx;
 
 stdexec::sync_wait(
-    velx::on_pool(pool.get_scheduler(), ctx.watch())
+    exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch())
   | exec::transform_each(stdexec::then([](velx::volume_event ev) {
       // ev.kind: interface_arrival / interface_removal
       // ev.device_path: UTF-8 lowercased "\\?\volume{guid}"
@@ -52,11 +52,11 @@ deliberately NOT done").
 ## Pool selection / scheduler
 
 The wrapper does not own a thread pool. The pool is selected at the
-pipeline level via `velx::on_pool`:
+pipeline level via `exec::sequence_with_scheduler`:
 
 ```cpp
 exec::windows_thread_pool pool{2, 4};
-sync_wait(velx::on_pool(pool.get_scheduler(), ctx.watch()) | ...);
+sync_wait(exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch()) | ...);
 ```
 
 `__watch_sender::subscribe` is constrained at compile time to require
@@ -65,10 +65,9 @@ Composing with any other scheduler is a compile error — same wall as
 DA / RDC pool against silent fallback when a user composes via
 `starts_on`.
 
-`velx::on_pool` is an instance of the shared `exec::__on_scheduler_t`
-adapter (the same type used by `fsx::on_queue`, `dax::on_queue`,
-`inx::on_ring`, and `rdcx::pool::on_pool`). See
-[`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
+`exec::sequence_with_scheduler` is the shared adapter from
+`include/exec/on_scheduler.hpp`, used by all five example wrappers.
+See [`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
 for why this exists rather than `stdexec::starts_on`.
 
 ## Platform comparison
@@ -77,7 +76,7 @@ for why this exists rather than `stdexec::starts_on`.
 |---|---|---|---|---|
 | Wrapper namespace | `dax` | **`velx`** | `inx` | `rdcx::pool` |
 | Reactor scheduler | `exec::libdispatch_queue` | **`exec::windows_thread_pool`** | `exec::io_uring_context` | `exec::windows_thread_pool` |
-| Env adapter | `dax::on_queue` | **`velx::on_pool`** | `inx::on_ring` | `rdcx::pool::on_pool` |
+| Env adapter | `exec::sequence_with_scheduler` | **`exec::sequence_with_scheduler`** | `exec::sequence_with_scheduler` | `exec::sequence_with_scheduler` |
 | Source primitive | `DARegisterDisk*Callback` | **`CM_Register_Notification` (DEVINTERFACE_VOLUME)** | `inotify_init1 + IORING_OP_READ` | `ReadDirectoryChangesW` |
 | Scope | device-level | **device-level** | filesystem-level | filesystem-level |
 | Item shape | per-event `disk_event` | **per-event `volume_event`** | batch `fs_batch` | batch `fs_batch` |

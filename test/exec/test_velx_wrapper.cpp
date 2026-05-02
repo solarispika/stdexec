@@ -42,8 +42,7 @@ namespace
   // libdispatch_scheduler check; this is the wall against silently routing
   // CM callbacks onto an unrelated scheduler when a user composes via
   // starts_on.
-  static_assert(!exec::__env_has_scheduler<stdexec::env<>,
-                                           exec::windows_thread_pool::scheduler>);
+  static_assert(!exec::__env_has_scheduler<stdexec::env<>, exec::windows_thread_pool::scheduler>);
 
   TEST_CASE("velx::volume_context watch can be cancelled before any volume event")
   {
@@ -57,11 +56,11 @@ namespace
     // when_any's child startup (timer fires before the watch is connected).
     // 50 ms is enough for start() to bring up CM + drainer + initial replay,
     // but short enough that the test stays fast.
-    stdexec::sync_wait(exec::when_any(
-      stdexec::starts_on(__timer_sched, stdexec::just())
-        | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-      velx::on_pool(__wtp.get_scheduler(), __ctx.watch())
-        | exec::ignore_all_values()));
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch())
+                       | exec::ignore_all_values()));
 
     // Reaching here means the watch's __on_stop_fn ran, the cleanup work
     // item ran, the drainer drained, CM_Unregister_Notification ran, and
@@ -79,11 +78,11 @@ namespace
 
     auto __run_once = [&]
     {
-      stdexec::sync_wait(exec::when_any(
-        stdexec::starts_on(__timer_sched, stdexec::just())
-          | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
-        velx::on_pool(__wtp.get_scheduler(), __ctx.watch())
-          | exec::ignore_all_values()));
+      stdexec::sync_wait(
+        exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                         | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                       exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch())
+                         | exec::ignore_all_values()));
     };
 
     __run_once();

@@ -12,7 +12,7 @@ scheduled.
 | `rdc_wrapper.hpp`      | Header-only `rdcx::rdc_context` — dedicated worker thread per watch |
 | `rdc_pool_wrapper.hpp` | Header-only `rdcx::pool::rdc_context` — Win32 thread-pool driven |
 | `rdc.cpp`              | Demo: `rdc_wrapper.hpp` + `transform_each` + `ignore_all_values` |
-| `rdc_pool.cpp`         | Demo: `rdc_pool_wrapper.hpp` + `windows_thread_pool` + `on_pool` |
+| `rdc_pool.cpp`         | Demo: `rdc_pool_wrapper.hpp` + `windows_thread_pool` + `sequence_with_scheduler` |
 | `rdc_README.md`        | This file |
 
 Build (only configured under `WIN32`):
@@ -51,7 +51,7 @@ exec::windows_thread_pool        pool{2, 4};
 rdcx::pool::rdc_context          ctx{L"C:\\path\\to\\dir"};
 
 stdexec::sync_wait(
-    rdcx::pool::on_pool(pool.get_scheduler(), ctx.watch(opts))
+    exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch(opts))
   | exec::transform_each(stdexec::then([](rdcx::pool::fs_batch b){ ... }))
   | exec::ignore_all_values());
 ```
@@ -65,11 +65,11 @@ to FSEvents' `last_completed_id()` — Win32 does not expose one.
 ## Pool selection / scheduler (pool variant)
 
 The pool wrapper does not own a thread pool. The pool is selected at the
-pipeline level via `rdcx::pool::on_pool`:
+pipeline level via `exec::sequence_with_scheduler`:
 
 ```cpp
 exec::windows_thread_pool pool{2, 4};
-sync_wait(rdcx::pool::on_pool(pool.get_scheduler(), ctx.watch(opts)) | ...);
+sync_wait(exec::sequence_with_scheduler(pool.get_scheduler(), ctx.watch(opts)) | ...);
 ```
 
 `__watch_sender::subscribe` is constrained at compile time to require a
@@ -78,15 +78,16 @@ any other scheduler type is a compile error — this prevents silently
 falling back to the process default pool when the caller intended e.g.
 a `static_thread_pool`.
 
-### Why `rdcx::pool::on_pool` instead of `stdexec::starts_on`?
+### Why `exec::sequence_with_scheduler` instead of `stdexec::starts_on`?
 
 Short version: `stdexec::starts_on` (and `stdexec::write_env`) collapse
 sequence-sender attributes today, so downstream `transform_each` loses
-the per-batch type. `rdcx::pool::on_pool` is a small adapter that does
-just the env injection while preserving sequence-sender semantics. See
+the per-batch type. `exec::sequence_with_scheduler` is the shared
+adapter (in `include/exec/on_scheduler.hpp`) that does just the env
+injection while preserving sequence-sender semantics. See
 [`sequence_sender_on_scheduler.md`](sequence_sender_on_scheduler.md)
-for the full explanation; the same pattern is used by `fsx::on_queue`
-on the macOS side.
+for the full explanation; the same adapter is used by all the example
+wrappers (FSEvents, DA, inotify, velx).
 
 ### How `__op` binds to the user's pool
 
@@ -210,7 +211,7 @@ pool variant the continuation chain stops being scheduled. `then`,
 |---|---|---|
 | Threads owned | 1 per active watch | 0 (shared pool) |
 | Backpressure mechanism | Semaphore on worker thread | Continuation chain |
-| User-supplied scheduler | None — owns its own thread | Required via env (`on_pool`) |
+| User-supplied scheduler | None — owns its own thread | Required via env (`sequence_with_scheduler`) |
 | Complexity | Lower — synchronous loop | Higher — `PTP_IO` lifecycle, deferred cleanup, env propagation |
 | Scales to many watches | Poorly — one thread each | Well — pool workers shared |
 | Cancellation latency | Immediate (`CancelIoEx` interrupts `GetOverlappedResult`) | Immediate, but cleanup work item adds one pool-dispatch hop |

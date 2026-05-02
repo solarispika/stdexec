@@ -615,9 +615,6 @@ namespace dax
     };
   }  // namespace __detail
 
-  // See examples/sequence_sender_on_scheduler.md.
-  inline constexpr exec::__on_scheduler_t on_queue{};
-
   inline auto da_context::watch(watch_options __opts) -> __detail::__watch_sender
   {
     return {this, __opts};

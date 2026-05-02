@@ -117,26 +117,26 @@ auto main() -> int
 
   // Run the watch until the timer wins, demonstrating cancellation through the
   // sequence-sender pipeline.
-  stdexec::sync_wait(exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
-                                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                                    dax::on_queue(__dax_pool.get_scheduler(),
-                                                  __ctx.watch({.watch_appeared            = true,
-                                                               .watch_disappeared         = true,
-                                                               .watch_description_changed = false}))
-                                      | exec::transform_each(stdexec::then(
-                                        [&](dax::disk_event __e)
-                                        {
-                                          std::printf("[%s] bsd=%s",
-                                                      kind_label(__e.kind),
-                                                      __e.bsd_name.empty() ? "?"
-                                                                           : __e.bsd_name.c_str());
-                                          if (__e.volume_name)
-                                            std::printf(" volume=\"%s\"", __e.volume_name->c_str());
-                                          if (__e.volume_path)
-                                            std::printf(" path=%s", __e.volume_path->c_str());
-                                          std::printf("\n");
-                                        }))
-                                      | exec::ignore_all_values()));
+  stdexec::sync_wait(
+    exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                     | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
+                   exec::sequence_with_scheduler(__dax_pool.get_scheduler(),
+                                                 __ctx.watch({.watch_appeared            = true,
+                                                              .watch_disappeared         = true,
+                                                              .watch_description_changed = false}))
+                     | exec::transform_each(stdexec::then(
+                       [&](dax::disk_event __e)
+                       {
+                         std::printf("[%s] bsd=%s",
+                                     kind_label(__e.kind),
+                                     __e.bsd_name.empty() ? "?" : __e.bsd_name.c_str());
+                         if (__e.volume_name)
+                           std::printf(" volume=\"%s\"", __e.volume_name->c_str());
+                         if (__e.volume_path)
+                           std::printf(" path=%s", __e.volume_path->c_str());
+                         std::printf("\n");
+                       }))
+                     | exec::ignore_all_values()));
 
   __mutator.join();
   fs::remove(__image, __ec);

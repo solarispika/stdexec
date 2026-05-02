@@ -19,23 +19,19 @@
 //
 // Used by example wrappers that need to expose a scheduler via
 // `get_scheduler` in the receiver env without losing sequence-sender
-// semantics on the wrapped sender. See
+// semantics on the wrapped sender. The adapter does NOT reschedule —
+// it only writes `get_scheduler -> sched` into the receiver env so the
+// wrapped sequence sender's `subscribe` (which is constrained on the
+// scheduler being present in env) is satisfied. See
 // examples/sequence_sender_on_scheduler.md for the full explanation,
 // and docs/plans/2026-04-29-stdexec-write_env-sequence-sender-issue.md
 // for the upstream issue this works around.
 //
 // The adapter is scheduler-agnostic — it accepts any
 // `stdexec::scheduler` and is shared by libdispatch-based wrappers
-// (FSEvents, DiskArbitration) and non-libdispatch wrappers (RDC pool).
-//
-// Each wrapper defines its own thin CPO instance:
-//
-//   namespace fsx {
-//     inline constexpr exec::__on_scheduler_t on_queue{};
-//   }
-//   namespace rdcx::pool {
-//     inline constexpr exec::__on_scheduler_t on_pool{};
-//   }
+// (FSEvents, DiskArbitration), io_uring (inotify), and Windows
+// thread-pool wrappers (RDC pool, velx). Callers spell it
+// `exec::sequence_with_scheduler(sched, snd)`.
 
 #include "../stdexec/execution.hpp"
 #include "sequence_senders.hpp"
@@ -115,7 +111,7 @@ namespace experimental::execution
     }
   };
 
-  struct __on_scheduler_t
+  struct sequence_with_scheduler_t
   {
     template <stdexec::scheduler _Sched, class _Snd>
     auto operator()(_Sched __sched, _Snd __snd) const -> __on_scheduler_sender<_Snd, _Sched>
@@ -123,6 +119,8 @@ namespace experimental::execution
       return {std::move(__snd), std::move(__sched)};
     }
   };
+
+  inline constexpr sequence_with_scheduler_t sequence_with_scheduler{};
 
   // For wrappers whose `subscribe` requires a specific scheduler type in
   // the receiver's env (typically the one this adapter injected).

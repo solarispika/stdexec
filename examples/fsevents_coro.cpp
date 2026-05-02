@@ -267,7 +267,7 @@ auto main() -> int
   std::thread       __producer_thread{
     [&]
     {
-      auto __pipeline = fsx::on_queue(__fsx_pool.get_scheduler(), __ctx.watch())
+      auto __pipeline = exec::sequence_with_scheduler(__fsx_pool.get_scheduler(), __ctx.watch())
                       | exec::transform_each(stdexec::then(
                         [&](fsx::fs_batch __b)
                         {
