@@ -59,6 +59,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_VOLUME,
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -190,7 +191,7 @@ namespace velx
 
       // MPSC queue (CM thread → pool drainer).
       std::mutex                      __queue_mu_;
-      std::vector<volume_event>       __queue_;
+      std::deque<volume_event>        __queue_;
       std::unordered_set<std::string> __seen_arrivals_;  // shares __queue_mu_
       std::atomic<bool>               __drainer_running_{false};
 
@@ -298,6 +299,7 @@ namespace velx
           .device_path = std::move(*__maybe_path),
         };
 
+        bool __submit = false;
         {
           std::lock_guard __lk{__self->__queue_mu_};
           if (__vev.kind == volume_event_kind::interface_arrival)
@@ -315,10 +317,12 @@ namespace velx
             __self->__seen_arrivals_.erase(__vev.device_path);
           }
           __self->__queue_.push_back(std::move(__vev));
-          if (!__self->__drainer_running_.exchange(true, std::memory_order_acq_rel))
-          {
-            SubmitThreadpoolWork(__self->__drainer_work_);
-          }
+          __submit =
+            !__self->__drainer_running_.exchange(true, std::memory_order_acq_rel);
+        }
+        if (__submit)
+        {
+          SubmitThreadpoolWork(__self->__drainer_work_);
         }
         return ERROR_SUCCESS;
       }
@@ -344,7 +348,7 @@ namespace velx
               return;  // idle exit; CM callback re-arms us
             }
             __ev = std::move(__self->__queue_.front());
-            __self->__queue_.erase(__self->__queue_.begin());
+            __self->__queue_.pop_front();
           }
 
           __self->__delivery_state_ = 0;
@@ -563,6 +567,7 @@ namespace velx
           // Multi-string: NUL-separated, double-NUL terminated. Lock the
           // queue mutex once for the whole batch so the CM callback can't
           // interleave dedup decisions mid-enumeration.
+          bool __submit = false;
           {
             std::lock_guard __lk{__queue_mu_};
             char const *    __p   = __buf.data();
@@ -581,10 +586,11 @@ namespace velx
             }
             // Mark drainer_running_ true while still under the lock so a
             // CM callback firing concurrently does not double-submit.
-            if (!__drainer_running_.exchange(true, std::memory_order_acq_rel))
-            {
-              SubmitThreadpoolWork(__drainer_work_);
-            }
+            __submit = !__drainer_running_.exchange(true, std::memory_order_acq_rel);
+          }
+          if (__submit)
+          {
+            SubmitThreadpoolWork(__drainer_work_);
           }
           break;
         }

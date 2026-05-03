@@ -80,6 +80,11 @@ namespace fsx
     {
       virtual ~__op_base()                    = default;
       virtual void deliver(fs_batch) noexcept = 0;
+
+      // Reused across FSEvents callbacks (the dispatch queue is serial, so
+      // only one callback at a time per __op). Hoisted out of the callback
+      // to avoid per-batch allocation churn.
+      std::vector<fs_event> __staging_;
     };
 
     template <class _Rcvr>
@@ -464,7 +469,8 @@ namespace fsx
     auto*  __self  = static_cast<__detail::__op_base*>(__ctx_ptr);
     auto** __paths = static_cast<char**>(__event_paths);
 
-    std::vector<fs_event> __staging;
+    auto& __staging = __self->__staging_;
+    __staging.clear();
     __staging.reserve(__num_events);
     bool                 __drops  = false;
     bool                 __rescan = false;

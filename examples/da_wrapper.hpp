@@ -240,9 +240,6 @@ namespace dax
       DASessionRef                     __session_{nullptr};
       CFArrayRef                       __desc_keys_array_{nullptr};
       CFDictionaryRef                  __match_dict_{nullptr};
-      bool                             __reg_appeared_{false};
-      bool                             __reg_disappeared_{false};
-      bool                             __reg_desc_changed_{false};
       std::atomic<bool>                __stop_requested_{false};
       std::binary_semaphore            __delivery_done_{0};
       int                              __delivery_state_{0};  // 1=value, 2=stopped, 3=error
@@ -368,7 +365,6 @@ namespace dax
                                          /*match=*/__match_dict_,
                                          &__on_appeared_cb,
                                          __self_as_void);
-          __reg_appeared_ = true;
         }
         if (__opts_.watch_disappeared)
         {
@@ -376,7 +372,6 @@ namespace dax
                                             /*match=*/__match_dict_,
                                             &__on_disappeared_cb,
                                             __self_as_void);
-          __reg_disappeared_ = true;
         }
         if (__opts_.watch_description_changed)
         {
@@ -405,7 +400,6 @@ namespace dax
                                                    /*watch=*/__desc_keys_array_,
                                                    &__on_desc_changed_cb,
                                                    __self_as_void);
-          __reg_desc_changed_ = true;
         }
 
         DASessionSetDispatchQueue(__session_, __queue_);
@@ -495,26 +489,23 @@ namespace dax
           return;
         DASessionSetDispatchQueue(__session_, nullptr);
         void* __self_as_void = static_cast<__op_base*>(this);
-        if (__reg_appeared_)
+        if (__opts_.watch_appeared)
         {
           DAUnregisterCallback(__session_,
                                reinterpret_cast<void*>(&__on_appeared_cb),
                                __self_as_void);
-          __reg_appeared_ = false;
         }
-        if (__reg_disappeared_)
+        if (__opts_.watch_disappeared)
         {
           DAUnregisterCallback(__session_,
                                reinterpret_cast<void*>(&__on_disappeared_cb),
                                __self_as_void);
-          __reg_disappeared_ = false;
         }
-        if (__reg_desc_changed_)
+        if (__opts_.watch_description_changed)
         {
           DAUnregisterCallback(__session_,
                                reinterpret_cast<void*>(&__on_desc_changed_cb),
                                __self_as_void);
-          __reg_desc_changed_ = false;
         }
         if (__desc_keys_array_)
         {

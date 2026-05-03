@@ -158,6 +158,7 @@ namespace rdcx
       HANDLE                           __ovl_event_{nullptr};
       OVERLAPPED                       __ovl_{};
       std::vector<DWORD>               __buffer_;  // DWORD-aligned storage
+      std::vector<fs_event>            __staging_;
       std::thread                      __thread_;
       std::atomic<bool>                __stop_requested_{false};
       std::binary_semaphore            __delivery_done_{0};
@@ -314,8 +315,8 @@ namespace rdcx
 
           // got == 0 with success means the kernel buffer was too small; all
           // events for this window are gone.
-          bool const            __overflow = (__got == 0);
-          std::vector<fs_event> __staging;
+          bool const __overflow = (__got == 0);
+          __staging_.clear();
           if (!__overflow)
           {
             auto const * __raw = reinterpret_cast<std::byte const *>(__buffer_.data());
@@ -324,7 +325,7 @@ namespace rdcx
             {
               auto const * __fni = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(__raw + __off);
               std::size_t const __chars = __fni->FileNameLength / sizeof(WCHAR);
-              __staging.push_back({
+              __staging_.push_back({
                 std::wstring{__fni->FileName, __chars},
                 __fni->Action
               });
@@ -333,7 +334,7 @@ namespace rdcx
               __off += __fni->NextEntryOffset;
             }
           }
-          fs_batch __batch{__staging, __overflow};
+          fs_batch __batch{__staging_, __overflow};
           deliver(__batch);
 
           if (__delivery_state_ == 2)
