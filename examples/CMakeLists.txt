@@ -109,6 +109,13 @@ if (APPLE)
               stdexec_executable_flags
               "-framework IOKit"
               "-framework CoreFoundation")
+
+  add_executable(example.netx netx.cpp)
+  target_link_libraries(example.netx
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              "-framework SystemConfiguration"
+              "-framework CoreFoundation")
 endif ()
 
 if (WIN32)
@@ -133,6 +140,17 @@ if (WIN32)
       PRIVATE STDEXEC::stdexec
               stdexec_executable_flags
               powrprof)
+
+  add_executable(example.netx netx.cpp)
+  target_compile_definitions(example.netx PRIVATE
+      WIN32_LEAN_AND_MEAN
+      NOMINMAX
+      _WIN32_WINNT=0x0A00)
+  target_link_libraries(example.netx
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              iphlpapi
+              ws2_32)
 endif ()
 
 foreach(example ${stdexec_examples})
