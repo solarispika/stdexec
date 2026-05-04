@@ -20,8 +20,16 @@
 // device, then any add/remove/change/etc events that fire during the
 // next 30 seconds, then exits. Trigger live events from another shell:
 //
-//   sudo losetup -f /tmp/udx_loop.img      # add
-//   sudo losetup -d /dev/loop7             # remove
+//   # synthetic add events for existing block devices (no state change):
+//   sudo udevadm trigger --action=add --subsystem-match=block
+//
+//   # transient dm-zero device (real add + remove):
+//   sudo dmsetup create udx_test --table '0 1 zero'
+//   sudo dmsetup remove udx_test
+//
+//   # if the loop kernel module has spare slots:
+//   sudo losetup -f --show /tmp/udx_loop.img
+//   sudo losetup -d /dev/loopN
 //
 // or by physically inserting / removing a USB drive.
 
@@ -71,8 +79,9 @@ namespace
 auto main() -> int
 {
   std::printf("watching subsystem=block for 30s; trigger via:\n");
-  std::printf("  sudo losetup -f --show /tmp/udx_loop.img    # add\n");
-  std::printf("  sudo losetup -d /dev/loopN                  # remove\n\n");
+  std::printf("  sudo udevadm trigger --action=add --subsystem-match=block   # synthetic add\n");
+  std::printf("  sudo dmsetup create udx_test --table '0 1 zero'             # real add\n");
+  std::printf("  sudo dmsetup remove udx_test                                # real remove\n\n");
 
   exec::io_uring_context __ring;
   std::thread            __driver{[&] { __ring.run_until_stopped(); }};

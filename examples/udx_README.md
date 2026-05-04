@@ -25,6 +25,28 @@ cmake --build build --target example.udx
 ./build/examples/example.udx
 ```
 
+The demo runs for 30 seconds and prints initial-replay `[add]` events
+for every currently-present block device. To exercise the live POLL
+path, trigger events from another shell. Pick whichever works on your
+box:
+
+```sh
+# (a) synthetic add events for existing devices — no state change.
+sudo udevadm trigger --action=add --subsystem-match=block
+
+# (b) transient device-mapper device — real add + real remove.
+sudo dmsetup create udx_test --table '0 1 zero'
+sudo dmsetup remove udx_test
+
+# (c) loopback file — only if the loop module has free slots
+# (Proxmox / KVM hosts often run out; check `losetup -a`).
+truncate -s 16M /tmp/udx_loop.img
+LOOP=$(sudo losetup -f --show /tmp/udx_loop.img)
+sudo losetup -d "$LOOP"
+
+# (d) physically insert / remove a USB drive.
+```
+
 ## API
 
 ```cpp
