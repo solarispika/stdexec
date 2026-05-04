@@ -67,9 +67,11 @@ namespace approval
   // legitimately block (service shutdown, file flushing) and you'd
   // rather give the OS a default than wedge its callback queue.
   //
-  // The token is a `stdexec::inplace_stop_token` because libc++ on
-  // Apple toolchains does not yet ship `std::stop_token` (Xcode 16.x
-  // as of 2026-05). The semantic surface is the same:
+  // The token is a `stdexec::inplace_stop_token` rather than
+  // `std::stop_token` for portability — older Apple toolchains
+  // (Xcode 16.x) ship `<stop_token>` as a stub. Xcode 26 onwards has
+  // `std::stop_token`, but stdexec's primitive is the canonical one
+  // used elsewhere in the codebase. Semantic surface is the same:
   // `tok.stop_requested()` returns true once the wrapper times out.
   template <class Info>
   struct bounded

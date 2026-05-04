@@ -50,6 +50,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_VOLUME,
             0x8b);
 #endif
 
+#include "approval_policy.hpp"
 #include "exec/on_scheduler.hpp"
 #include "exec/sequence_senders.hpp"
 #include "exec/windows/windows_thread_pool.hpp"
@@ -68,6 +69,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_VOLUME,
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -76,18 +78,68 @@ namespace velx
 {
   enum class volume_event_kind
   {
+    // Device-interface filter (CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE).
+    // The kernel-confirmed "volume class member appeared / disappeared"
+    // signal — sufficient for consumers that only need add/remove and
+    // don't want a per-volume HANDLE.
     interface_arrival,
-    interface_removal
+    interface_removal,
+
+    // Device-handle filter (CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE), opt-in
+    // via watch_options.watch_handle_events. Each appeared volume gets
+    // its own per-device HCMNOTIFICATION + open HANDLE; the wrapper
+    // closes them on interface_removal or teardown.
+    handle_remove_pending,       // CM_NOTIFY_ACTION_DEVICEREMOVEPENDING
+    handle_remove_complete,      // CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE
+    handle_query_remove_failed,  // CM_NOTIFY_ACTION_DEVICEQUERYREMOVEFAILED
+    handle_custom_event,         // CM_NOTIFY_ACTION_DEVICECUSTOMEVENT
   };
 
   struct volume_event
   {
     volume_event_kind kind;
     std::string       device_path;  // UTF-8 lowercased "\\?\volume{guid}"
+
+    // Populated only for handle_custom_event — the GUID identifying the
+    // vendor-specific event (e.g. GUID_IO_VOLUME_MOUNT,
+    // GUID_IO_VOLUME_DISMOUNT, GUID_IO_VOLUME_NAME_CHANGE).
+    std::optional<GUID> custom_guid{};
   };
 
+  // Per-approval-callback payload for query_remove. Same identity field
+  // as volume_event so a predicate can match it against state built from
+  // notification events.
+  struct volume_info
+  {
+    std::string device_path;  // UTF-8 lowercased "\\?\volume{guid}"
+  };
+
+  // Tagged-union policy specialised for velx::volume_info — see
+  // examples/approval_policy.hpp for the sync/bounded/monostate
+  // semantics. Same shape as dax::approval_policy.
+  using approval_policy = approval::policy<volume_info>;
+
   struct watch_options
-  {};  // empty in v1, reserved for v2
+  {
+    // When true, every device that fires interface_arrival also gets a
+    // per-device HCMNOTIFICATION (CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE)
+    // registered against an open HANDLE to the volume. Required for
+    // any of the handle_* event kinds (and for query_remove approval)
+    // to fire. Defaults false to match v1 behavior — opt in only when
+    // you actually need the per-device layer, since each device costs
+    // one HCMNOTIFICATION + one open HANDLE.
+    bool watch_handle_events{false};
+
+    // Query-remove approval (CM_NOTIFY_ACTION_DEVICEQUERYREMOVE). Same
+    // tagged-union shape as DA's approval fields — see
+    // examples/approval_policy.hpp. Default monostate = wrapper returns
+    // CR_SUCCESS (allow) without invoking any predicate, matching the
+    // pre-v2 behavior of "no per-device callbacks at all".
+    //
+    // Only fires when watch_handle_events is true, since query-remove
+    // is a handle-filter action.
+    approval_policy query_remove{};
+  };
 
   class volume_context;
 
@@ -174,6 +226,21 @@ namespace velx
       return __s;
     }
 
+    // Inverse of __wcs_to_utf8_lower for the per-device CreateFileW path.
+    // The volume path is pure ASCII so the conversion is essentially a
+    // widening, but we route through MultiByteToWideChar to keep the
+    // boundary handling consistent with the wcs_to_utf8 side.
+    inline auto __utf8_to_wcs(std::string const & __s) -> std::optional<std::wstring>
+    {
+      int const __wlen = ::MultiByteToWideChar(CP_UTF8, 0, __s.c_str(), -1, nullptr, 0);
+      if (__wlen <= 0)
+        return std::nullopt;
+      std::wstring __w(static_cast<std::size_t>(__wlen - 1), L'\0');
+      if (::MultiByteToWideChar(CP_UTF8, 0, __s.c_str(), -1, __w.data(), __wlen) <= 0)
+        return std::nullopt;
+      return __w;
+    }
+
     template <class _Rcvr>
     struct __op : __op_base
     {
@@ -189,11 +256,25 @@ namespace velx
       HCMNOTIFICATION     __hnotify_{nullptr};
       PTP_WORK            __drainer_work_{nullptr};
 
+      // Per-device handle registration. Populated only when
+      // watch_options::watch_handle_events is true. Each entry owns one
+      // open HANDLE to the volume + one HCMNOTIFICATION on the
+      // CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE filter. Lives under
+      // __queue_mu_ so the interface-filter CM callback (arrival /
+      // removal) and the handle-filter CM callback (which looks up by
+      // hNotify) cannot race on the map shape.
+      struct __device_reg
+      {
+        HANDLE          __handle{INVALID_HANDLE_VALUE};
+        HCMNOTIFICATION __notify{nullptr};
+      };
+
       // MPSC queue (CM thread → pool drainer).
-      std::mutex                      __queue_mu_;
-      std::deque<volume_event>        __queue_;
-      std::unordered_set<std::string> __seen_arrivals_;  // shares __queue_mu_
-      std::atomic<bool>               __drainer_running_{false};
+      std::mutex                                    __queue_mu_;
+      std::deque<volume_event>                      __queue_;
+      std::unordered_set<std::string>               __seen_arrivals_;  // shares __queue_mu_
+      std::unordered_map<std::string, __device_reg> __device_regs_;    // shares __queue_mu_
+      std::atomic<bool>                             __drainer_running_{false};
 
       // Per-delivery handshake (drainer ↔ next_receiver). Same shape as DA.
       std::binary_semaphore __delivery_done_{0};
@@ -255,6 +336,14 @@ namespace velx
         {
           CM_Unregister_Notification(__hnotify_);
         }
+        // Defensive: per-device handle registrations should already
+        // have been torn down by the cleanup work item. Path (2) of
+        // this dtor (start() failed before cleanup wired up) cannot
+        // have populated __device_regs_ because watch_handle_events
+        // only takes effect inside the drainer, which never ran. So
+        // this clear is a no-op in path (1) and a no-op in path (2);
+        // it exists purely to make the lifecycle invariant explicit.
+        __unregister_all_device_handles();
         if (__drainer_work_)
         {
           CloseThreadpoolWork(__drainer_work_);
@@ -317,14 +406,100 @@ namespace velx
             __self->__seen_arrivals_.erase(__vev.device_path);
           }
           __self->__queue_.push_back(std::move(__vev));
-          __submit =
-            !__self->__drainer_running_.exchange(true, std::memory_order_acq_rel);
+          __submit = !__self->__drainer_running_.exchange(true, std::memory_order_acq_rel);
         }
         if (__submit)
         {
           SubmitThreadpoolWork(__self->__drainer_work_);
         }
         return ERROR_SUCCESS;
+      }
+
+      // Per-device CM callback. Fires for the
+      // CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE registration the wrapper
+      // creates on each volume when watch_options::watch_handle_events
+      // is true.
+      //
+      // QUERYREMOVE returns the verdict synchronously (CR_SUCCESS =
+      // allow, ERROR_CANCELLED = veto) by resolving the configured
+      // approval policy. Everything else (REMOVEPENDING, REMOVECOMPLETE,
+      // QUERYREMOVEFAILED, CUSTOMEVENT) gets translated into a
+      // volume_event and pushed onto the same MPSC queue the
+      // interface-filter callback uses, so the consumer sees one
+      // ordered event stream.
+      //
+      // hNotify → device_path lookup is O(n) over __device_regs_ — n is
+      // the number of currently-tracked volumes (typically a handful),
+      // so this is fine. Mirrors the OrangeDrive reference's pattern.
+      static auto CALLBACK __handle_callback(HCMNOTIFICATION       __hnotify,
+                                             PVOID                 __ctx_ptr,
+                                             CM_NOTIFY_ACTION      __action,
+                                             PCM_NOTIFY_EVENT_DATA __ev,
+                                             DWORD) -> DWORD
+      {
+        if (!__ev || __ev->FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE)
+          return ERROR_SUCCESS;
+
+        auto* __self = static_cast<__op*>(__ctx_ptr);
+
+        // Look up the device path from the hNotify handle. Hold the
+        // queue mutex only across the lookup; if we're dispatching to
+        // the user's predicate or pushing to the queue, those happen
+        // outside the lookup lock so an unrelated CM thread isn't
+        // blocked on us.
+        std::string __path;
+        {
+          std::lock_guard __lk{__self->__queue_mu_};
+          for (auto const& [__p, __reg]: __self->__device_regs_)
+          {
+            if (__reg.__notify == __hnotify)
+            {
+              __path = __p;
+              break;
+            }
+          }
+        }
+        if (__path.empty())
+        {
+          // The registration was already torn down (interface_removal
+          // ran on the drainer just before this callback fired, or we
+          // are in the middle of teardown). Allow the operation by
+          // default for QUERYREMOVE — vetoing without context is worse
+          // than allowing — and silently drop everything else.
+          return ERROR_SUCCESS;
+        }
+
+        switch (__action)
+        {
+        case CM_NOTIFY_ACTION_DEVICEQUERYREMOVE:
+        {
+          bool const __allow = approval::resolve_verdict<volume_info>(__self->__opts_.query_remove,
+                                                                      [&]
+                                                                      {
+                                                                        return volume_info{__path};
+                                                                      });
+          return __allow ? ERROR_SUCCESS : ERROR_CANCELLED;
+        }
+        case CM_NOTIFY_ACTION_DEVICEQUERYREMOVEFAILED:
+          __self->__push_handle_event(
+            {.kind = volume_event_kind::handle_query_remove_failed, .device_path = __path});
+          return ERROR_SUCCESS;
+        case CM_NOTIFY_ACTION_DEVICEREMOVEPENDING:
+          __self->__push_handle_event(
+            {.kind = volume_event_kind::handle_remove_pending, .device_path = __path});
+          return ERROR_SUCCESS;
+        case CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE:
+          __self->__push_handle_event(
+            {.kind = volume_event_kind::handle_remove_complete, .device_path = __path});
+          return ERROR_SUCCESS;
+        case CM_NOTIFY_ACTION_DEVICECUSTOMEVENT:
+          __self->__push_handle_event({.kind        = volume_event_kind::handle_custom_event,
+                                       .device_path = __path,
+                                       .custom_guid = __ev->u.DeviceHandle.EventGuid});
+          return ERROR_SUCCESS;
+        default:
+          return ERROR_SUCCESS;
+        }
       }
 
       static void CALLBACK __drainer_callback(PTP_CALLBACK_INSTANCE,
@@ -349,6 +524,22 @@ namespace velx
             }
             __ev = std::move(__self->__queue_.front());
             __self->__queue_.pop_front();
+          }
+
+          // Per-device handle registration is the drainer's job (not the
+          // CM callback's): CreateFileW + CM_Register_Notification can
+          // block, and the drainer runs on the user's pool, not on a
+          // CM thread. Doing it before delivery means the consumer can
+          // assume the handle layer is already armed when it sees the
+          // arrival event. Best-effort — failures are silently dropped
+          // (consumer can try again on next arrival), matching the
+          // reference's WARN-and-continue posture.
+          if (__self->__opts_.watch_handle_events)
+          {
+            if (__ev.kind == volume_event_kind::interface_arrival)
+              __self->__register_device_handle(__ev.device_path);
+            else if (__ev.kind == volume_event_kind::interface_removal)
+              __self->__unregister_device_handle(__ev.device_path);
           }
 
           __self->__delivery_state_ = 0;
@@ -396,6 +587,131 @@ namespace velx
         SubmitThreadpoolWork(__cleanup_work_);
       }
 
+      // Push a non-arrival/removal event onto the queue (handle-filter
+      // callbacks). Mirrors the queue-push half of __cm_callback but
+      // skips the interface-arrival dedup path. Drops on stop_requested
+      // so a late handle event after teardown doesn't grow the queue.
+      void __push_handle_event(volume_event __ev) noexcept
+      {
+        bool __submit = false;
+        {
+          std::lock_guard __lk{__queue_mu_};
+          if (__stop_requested_.load(std::memory_order_acquire))
+            return;
+          __queue_.push_back(std::move(__ev));
+          __submit = !__drainer_running_.exchange(true, std::memory_order_acq_rel);
+        }
+        if (__submit)
+          SubmitThreadpoolWork(__drainer_work_);
+      }
+
+      // Open a per-volume HANDLE and register a DEVICEHANDLE-filter
+      // CM notification against it. Returns true on success (the entry
+      // is now in __device_regs_), false on any failure (caller logs +
+      // continues; mirrors the WARN-and-continue posture of the
+      // OrangeDrive reference).
+      //
+      // Sharing flags are deliberately permissive (READ|WRITE|DELETE)
+      // so the wrapper does not steal exclusive access from anything
+      // else on the system. We only need a kernel handle to use as the
+      // CM filter target, not actual data access.
+      //
+      // Must NOT be called while holding __queue_mu_ —
+      // CM_Register_Notification can block, and we don't want to
+      // serialize that against the queue.
+      auto __register_device_handle(std::string const & __path) noexcept -> bool
+      {
+        if (!__opts_.watch_handle_events)
+          return false;
+
+        auto __wpath = __utf8_to_wcs(__path);
+        if (!__wpath)
+          return false;
+
+        HANDLE __h = ::CreateFileW(__wpath->c_str(),
+                                   GENERIC_READ,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   nullptr,
+                                   OPEN_EXISTING,
+                                   FILE_ATTRIBUTE_NORMAL,
+                                   nullptr);
+        if (__h == INVALID_HANDLE_VALUE)
+          return false;
+
+        CM_NOTIFY_FILTER __filter{};
+        __filter.cbSize                 = sizeof(__filter);
+        __filter.FilterType             = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
+        __filter.u.DeviceHandle.hTarget = __h;
+
+        HCMNOTIFICATION __n = nullptr;
+        if (CONFIGRET const __cr =
+              CM_Register_Notification(&__filter, this, &__handle_callback, &__n);
+            __cr != CR_SUCCESS)
+        {
+          CloseHandle(__h);
+          return false;
+        }
+
+        // The fresh hNotify cannot have any in-flight callback yet, so
+        // CM_Unregister_Notification on the duplicate-key path below is
+        // safe to call under the lock.
+        std::lock_guard __lk{__queue_mu_};
+        auto [__it, __inserted] = __device_regs_.try_emplace(__path, __device_reg{__h, __n});
+        if (!__inserted)
+        {
+          CM_Unregister_Notification(__n);
+          CloseHandle(__h);
+          return false;
+        }
+        return true;
+      }
+
+      // Drop the per-device registration for `path` (if any). Extracts
+      // the entry under the lock then releases it before calling
+      // CM_Unregister_Notification — that call blocks until any
+      // in-flight handle callback returns, and an in-flight callback
+      // tries to take __queue_mu_, so we must NOT hold it across the
+      // unregister.
+      void __unregister_device_handle(std::string const & __path) noexcept
+      {
+        __device_reg __reg{};
+        {
+          std::lock_guard __lk{__queue_mu_};
+          auto            __it = __device_regs_.find(__path);
+          if (__it == __device_regs_.end())
+            return;
+          __reg = __it->second;
+          __device_regs_.erase(__it);
+        }
+        if (__reg.__notify)
+          CM_Unregister_Notification(__reg.__notify);
+        if (__reg.__handle != INVALID_HANDLE_VALUE)
+          CloseHandle(__reg.__handle);
+      }
+
+      // Drop ALL per-device registrations. Same locking discipline as
+      // __unregister_device_handle: extract the snapshot under the
+      // lock, release, then unregister + close. Used by the cleanup
+      // work item.
+      void __unregister_all_device_handles() noexcept
+      {
+        std::vector<__device_reg> __regs;
+        {
+          std::lock_guard __lk{__queue_mu_};
+          __regs.reserve(__device_regs_.size());
+          for (auto& [__p, __r]: __device_regs_)
+            __regs.push_back(__r);
+          __device_regs_.clear();
+        }
+        for (auto& __r: __regs)
+        {
+          if (__r.__notify)
+            CM_Unregister_Notification(__r.__notify);
+          if (__r.__handle != INVALID_HANDLE_VALUE)
+            CloseHandle(__r.__handle);
+        }
+      }
+
       static void CALLBACK __cleanup_callback(PTP_CALLBACK_INSTANCE,
                                               void* __ctx_ptr,
                                               PTP_WORK) noexcept
@@ -410,10 +726,12 @@ namespace velx
         // re-enter teardown while we are mid-cleanup.
         __stop_cb_.reset();
 
-        // (b) Unregister the CM notification. This is the unique safe site:
-        // we are NOT in a CM callback frame (we are in a pool work item),
-        // so the API contract that "CM_Unregister_Notification cannot be
-        // called from inside a CM callback" is satisfied. The OrangeDrive
+        // (b) Unregister the interface-filter CM notification first,
+        // so no new arrivals/removals can land while we tear down the
+        // per-device handle registrations. This is the unique safe
+        // site: we are NOT in a CM callback frame (we are in a pool
+        // work item), so "CM_Unregister_Notification cannot be called
+        // from inside a CM callback" is satisfied. The OrangeDrive
         // reference needed a dedicated abandoned-thread for this; the
         // cleanup work item plays that role here.
         if (__hnotify_)
@@ -421,6 +739,13 @@ namespace velx
           CM_Unregister_Notification(__hnotify_);
           __hnotify_ = nullptr;
         }
+
+        // (b2) Drop every per-device DEVICEHANDLE registration that
+        // watch_handle_events accumulated. Each unregister blocks
+        // until any in-flight handle callback for that hNotify
+        // returns, so after this point no handle_* events can fire.
+        // Closes the open volume handles too.
+        __unregister_all_device_handles();
 
         // (c) Wait for the drainer to drain. The drainer observes
         // __stop_requested_ on its next loop iteration and returns; if it

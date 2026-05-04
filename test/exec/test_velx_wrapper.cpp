@@ -92,4 +92,107 @@ namespace
     // after the first run, allowing the second subscribe to CAS in.
     SUCCEED("two sequential subscriptions completed");
   }
+
+  TEST_CASE("velx::volume_context watch with default v2 options lifecycles cleanly")
+  {
+    exec::windows_thread_pool __wtp{2, 4};
+    exec::static_thread_pool  __tp{1};
+    auto                      __timer_sched = __tp.get_scheduler();
+
+    velx::volume_context __ctx;
+
+    // Default-constructed watch_options leaves watch_handle_events=false
+    // and query_remove=monostate. The wrapper should NOT register any
+    // per-device DEVICEHANDLE notifications and should NOT invoke any
+    // approval predicate. Verified structurally: lifecycle round-trip.
+    velx::watch_options __opts{};
+    static_assert(std::is_same_v<decltype(__opts.query_remove), velx::approval_policy>);
+    CHECK(__opts.watch_handle_events == false);
+    CHECK(__opts.query_remove.index() == 0);  // monostate
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("default v2 round-trip completed");
+  }
+
+  TEST_CASE("velx::volume_context watch with watch_handle_events lifecycles cleanly")
+  {
+    exec::windows_thread_pool __wtp{2, 4};
+    exec::static_thread_pool  __tp{1};
+    auto                      __timer_sched = __tp.get_scheduler();
+
+    velx::volume_context __ctx;
+
+    // Smoke test: enabling watch_handle_events causes the wrapper to
+    // open a HANDLE + register a CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE
+    // notification for each volume that surfaces during the run. We
+    // can't deterministically force a volume mount/unmount in a test,
+    // so we only verify that the per-device register/unregister paths
+    // (executed by the drainer when initial-replay arrival events
+    // process) lifecycle cleanly through teardown. Bumping the timer
+    // above the v1 defaults so the drainer has time to attempt
+    // registrations on whatever volumes were enumerated.
+    velx::watch_options __opts{};
+    __opts.watch_handle_events = true;
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(200ms); }),
+                     exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("watch_handle_events round-trip completed");
+  }
+
+  TEST_CASE("velx::volume_context watch with sync query_remove approval lifecycles cleanly")
+  {
+    exec::windows_thread_pool __wtp{2, 4};
+    exec::static_thread_pool  __tp{1};
+    auto                      __timer_sched = __tp.get_scheduler();
+
+    velx::volume_context __ctx;
+
+    velx::watch_options __opts{};
+    __opts.watch_handle_events = true;
+    __opts.query_remove        = approval::sync<velx::volume_info>{
+             .predicate = [](velx::volume_info const &) { return true; },
+    };
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(200ms); }),
+                     exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("sync query_remove approval round-trip completed");
+  }
+
+  TEST_CASE("velx::volume_context watch with bounded query_remove approval lifecycles cleanly")
+  {
+    exec::windows_thread_pool __wtp{2, 4};
+    exec::static_thread_pool  __tp{1};
+    auto                      __timer_sched = __tp.get_scheduler();
+
+    velx::volume_context __ctx;
+
+    velx::watch_options __opts{};
+    __opts.watch_handle_events = true;
+    __opts.query_remove        = approval::bounded<velx::volume_info>{
+             .predicate = [](velx::volume_info const &, stdexec::inplace_stop_token) { return true; },
+             .timeout   = 100ms,
+             .on_timeout_allow = true,
+    };
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(200ms); }),
+                     exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("bounded query_remove approval round-trip completed");
+  }
 }  // namespace

@@ -43,11 +43,66 @@ stdexec::sync_wait(
 ```
 
 `volume_event` carries:
-- `kind` — `interface_arrival` or `interface_removal`
+- `kind` — one of `interface_arrival`, `interface_removal`,
+  `handle_remove_pending`, `handle_remove_complete`,
+  `handle_query_remove_failed`, `handle_custom_event`
 - `device_path` — `\\?\Volume{guid}` form, UTF-8, lowercased
+- `custom_guid` — populated only for `handle_custom_event`
+  (e.g. `GUID_IO_VOLUME_MOUNT`, `GUID_IO_VOLUME_NAME_CHANGE`)
 
-`watch_options{}` is empty in v1 (reserved for v2 — see "Things
-deliberately NOT done").
+`watch_options` controls which event surfaces fire. Defaults match
+the v1 minimum (interface arrival / removal only).
+
+### Per-device handle layer (`watch_handle_events`)
+
+Set `watch_options::watch_handle_events = true` to opt into the
+per-volume `CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE` registrations. Each
+volume that surfaces during the run (initial enumeration + live
+arrivals) gets its own `CreateFileW` HANDLE + `HCMNOTIFICATION`,
+which surfaces the four `handle_*` event kinds plus the query-remove
+approval path. The wrapper closes them on `interface_removal` /
+teardown.
+
+Cost: one open handle + one CM registration per tracked volume.
+Sharing flags are `READ | WRITE | DELETE` — the wrapper does not
+take exclusive access, so other consumers (Explorer, antivirus, …)
+keep working normally.
+
+### Pre-removal hook (query-remove approval)
+
+`CM_NOTIFY_ACTION_DEVICEQUERYREMOVE` lets a listener veto a
+"safely-remove" attempt by returning `ERROR_CANCELLED`. The wrapper
+exposes this via `watch_options::query_remove`, a
+`velx::approval_policy` (= `approval::policy<velx::volume_info>`):
+
+```cpp
+velx::watch_options opts{};
+opts.watch_handle_events = true;   // required for query_remove to fire
+opts.query_remove        = approval::sync<velx::volume_info>{
+  .predicate = [](velx::volume_info const& info) {
+    do_my_cleanup(info);   // runs inline on the CM thread
+    return true;           // allow; return false to veto
+  },
+};
+```
+
+For predicates that may legitimately block (service shutdown,
+file-flush waits) use `approval::bounded` so the wrapper enforces a
+timeout and falls back to `on_timeout_allow` if the worker overruns:
+
+```cpp
+opts.query_remove = approval::bounded<velx::volume_info>{
+  .predicate = [](velx::volume_info const& info, stdexec::inplace_stop_token tok) {
+    return stop_services_for(info, tok);
+  },
+  .timeout          = std::chrono::seconds{4},
+  .on_timeout_allow = true,
+};
+```
+
+Same shape as `dax::approval_policy` — both wrappers share
+`examples/approval_policy.hpp`. Default `monostate` skips the
+approval predicate entirely (wrapper returns `CR_SUCCESS`).
 
 ## Pool selection / scheduler
 
@@ -208,21 +263,13 @@ the cleanup work item plays that role here.
 | **Dedup is required, not optional** | The `register-then-enumerate` ordering is correct (enumerate-first would lose volumes that appeared in the gap), but it can produce duplicate arrivals if a volume appears in the gap between register and enum. The wrapper's `__seen_arrivals_` set dedupes, also handles `interface_removal` (erase) so re-arrivals are reported. |
 | **Buffer sizing race** | `CM_Get_Device_Interface_List_SizeA` returns a size that may grow before `CM_Get_Device_Interface_List` runs (e.g. a USB plug between the two calls). The wrapper retries on `CR_BUFFER_SMALL` — same loop as the OrangeDrive reference. |
 | **Multi-string format** | `CM_Get_Device_Interface_ListA` returns a NUL-separated, double-NUL-terminated multi-string. The wrapper parses it sequentially via `strlen` walks. |
+| **Handle layer is opt-in** | `watch_handle_events = false` (default) keeps the wrapper at v1's interface-only behavior — no `CreateFileW`, no per-device CM registrations, no handle-filter callback. Setting it to true is the prerequisite for the four `handle_*` event kinds and for `query_remove` to fire. |
+| **Per-device handle sharing flags** | `CreateFileW(GENERIC_READ, FILE_SHARE_READ \| FILE_SHARE_WRITE \| FILE_SHARE_DELETE, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL)`. Permissive on purpose — the handle is only used as a CM filter target, not for I/O, so the wrapper must not steal exclusive access from anything else on the system. |
+| **Handle-register failure is silent** | Per-device `CreateFileW` / `CM_Register_Notification` failure during the drainer's arrival processing is dropped; the consumer still sees the `interface_arrival` event. Mirrors the OrangeDrive reference's WARN-and-continue posture. The drainer logs nothing here — wire your own observability via `transform_each` if you need it. |
+| **Causal ordering between `handle_remove_complete` and `interface_removal`** | In a controlled "safely-remove" flow, `REMOVECOMPLETE` fires *before* `INTERFACEREMOVAL` and the consumer sees them in that order. In an abrupt unplug, only `INTERFACEREMOVAL` fires (no `REMOVECOMPLETE`). The wrapper preserves the OS's order; do not assume both events always arrive. |
 
 ## Things deliberately NOT done
 
-- **Handle-level notifications** (per-volume `CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE`):
-  remove-pending, remove-complete, custom-event GUID. The reference
-  listener's primary motivation for this layer is "give the consumer
-  time to clean up before ejection," which v2 should cover. v1's
-  `interface_removal` already carries the kernel-confirmed "volume is
-  gone" signal — sufficient for the vast majority of consumers.
-- **Query-Remove veto**. Same request/response shape as DA approval
-  callbacks. v2 should decide between (a) a separate `query_remove_sender`
-  that returns `bool`, or (b) a per-event ack object on the main sender.
-  Both have known footguns.
-- **Custom-event GUID dispatch** (vendor events). Tied to the
-  handle-level layer; ships together with v2.
 - **Match dictionary in `watch_options`**. `CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE`
   has no kernel-side match analogue beyond the class GUID. A
   wrapper-side filter is just `transform_each | filter` in user code.
