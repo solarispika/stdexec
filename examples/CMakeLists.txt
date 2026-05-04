@@ -67,6 +67,20 @@ if (LINUX)
                     "example.io_uring : io_uring.cpp"
                     "example.inotify : inotify.cpp"
   )
+
+  find_package(PkgConfig QUIET)
+  if (PkgConfig_FOUND)
+    pkg_check_modules(UDEV libudev)
+  endif ()
+  if (UDEV_FOUND)
+    add_executable(example.udx udx.cpp)
+    target_link_libraries(example.udx
+        PRIVATE STDEXEC::stdexec
+                stdexec_executable_flags
+                ${UDEV_LIBRARIES})
+    target_include_directories(example.udx PRIVATE ${UDEV_INCLUDE_DIRS})
+    target_compile_options(example.udx PRIVATE ${UDEV_CFLAGS_OTHER})
+  endif ()
 endif ()
 
 if (APPLE)
