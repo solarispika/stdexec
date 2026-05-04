@@ -154,6 +154,89 @@ namespace
     SUCCEED("description_keys narrowing round-trip completed");
   }
 
+  TEST_CASE("dax::da_context watch with default approval policies lifecycles cleanly")
+  {
+    exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.appr_"
+                                                                               "default");
+    exec::static_thread_pool __tp{1};
+    auto                     __timer_sched = __tp.get_scheduler();
+
+    dax::da_context __ctx;
+
+    // Default-constructed watch_options leaves all three approval fields
+    // monostate. The wrapper should NOT call DARegister*ApprovalCallback in
+    // that case — verified structurally by exercising the round-trip and
+    // confirming teardown still completes cleanly.
+    dax::watch_options __opts{};
+    static_assert(std::is_same_v<decltype(__opts.mount_approval), dax::approval_policy>);
+    static_assert(std::is_same_v<decltype(__opts.unmount_approval), dax::approval_policy>);
+    static_assert(std::is_same_v<decltype(__opts.eject_approval), dax::approval_policy>);
+    CHECK(__opts.mount_approval.index() == 0);    // monostate
+    CHECK(__opts.unmount_approval.index() == 0);  // monostate
+    CHECK(__opts.eject_approval.index() == 0);    // monostate
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("default-approval round-trip completed");
+  }
+
+  TEST_CASE("dax::da_context watch with sync unmount/eject approval lifecycles cleanly")
+  {
+    exec::libdispatch_queue __pool = exec::libdispatch_queue::make_concurrent("test.dax.appr_sync");
+    exec::static_thread_pool __tp{1};
+    auto                     __timer_sched = __tp.get_scheduler();
+
+    dax::da_context __ctx;
+
+    // Smoke test: setting sync predicates flips the wrapper into
+    // DARegister*ApprovalCallback territory. We can't trigger an
+    // unmount/eject deterministically without privileged disk ops, so we
+    // only verify that the registration and teardown paths run cleanly.
+    dax::watch_options __opts{};
+    __opts.unmount_approval = approval::sync<dax::disk_info>{
+      .predicate = [](dax::disk_info const &) { return true; },
+    };
+    __opts.eject_approval = approval::sync<dax::disk_info>{
+      .predicate = [](dax::disk_info const &) { return true; },
+    };
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("sync approval round-trip completed");
+  }
+
+  TEST_CASE("dax::da_context watch with bounded unmount approval lifecycles cleanly")
+  {
+    exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.appr_bnd");
+    exec::static_thread_pool __tp{1};
+    auto                     __timer_sched = __tp.get_scheduler();
+
+    dax::da_context __ctx;
+
+    dax::watch_options __opts{};
+    __opts.unmount_approval = approval::bounded<dax::disk_info>{
+      .predicate        = [](dax::disk_info const &, stdexec::inplace_stop_token) { return true; },
+      .timeout          = 100ms,
+      .on_timeout_allow = true,
+    };
+
+    stdexec::sync_wait(
+      exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+                       | stdexec::then([] { std::this_thread::sleep_for(50ms); }),
+                     exec::sequence_with_scheduler(__pool.get_scheduler(), __ctx.watch(__opts))
+                       | exec::ignore_all_values()));
+
+    SUCCEED("bounded approval round-trip completed");
+  }
+
   TEST_CASE("dax::da_context watch with match filter lifecycles cleanly")
   {
     exec::libdispatch_queue  __pool = exec::libdispatch_queue::make_concurrent("test.dax.match");

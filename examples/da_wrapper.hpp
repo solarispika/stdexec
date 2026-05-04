@@ -25,6 +25,7 @@
 #include <DiskArbitration/DiskArbitration.h>
 #include <dispatch/dispatch.h>
 
+#include "approval_policy.hpp"
 #include "exec/libdispatch_queue.hpp"
 #include "exec/on_scheduler.hpp"
 #include "exec/sequence_senders.hpp"
@@ -61,6 +62,22 @@ namespace dax
     std::vector<std::string>   changed_keys;  // populated only for description_changed
   };
 
+  // Per-approval-callback payload — same identity fields as `disk_event`
+  // (no `kind` / `changed_keys` since approvals are about a specific
+  // mount/unmount/eject of an identified disk, not a state-change event).
+  struct disk_info
+  {
+    std::string                bsd_name;
+    std::optional<std::string> volume_name;
+    std::optional<std::string> volume_path;
+  };
+
+  // Tagged-union policy specialised for dax::disk_info — see
+  // examples/approval_policy.hpp for the sync/bounded/monostate
+  // semantics. velx defines its own `velx::approval_policy` over its
+  // own info type using the same template.
+  using approval_policy = approval::policy<disk_info>;
+
   struct watch_options
   {
     bool watch_appeared{true};
@@ -92,6 +109,24 @@ namespace dax
     // CFString, e.g. `DAVolumeKind = "apfs"`). Other CF value types
     // (CFNumber, CFUUID, ...) are not modeled — extend if needed.
     std::map<std::string, std::variant<bool, std::string>> match{};
+
+    // Approval / pre-event hook policies. Default = monostate = the
+    // wrapper does NOT call DARegister*ApprovalCallback for that lifecycle
+    // verb (i.e. DA proceeds with no input from this listener — the
+    // pre-existing v1 behavior).
+    //
+    // When set to approval::sync<disk_info>, the predicate runs inline on
+    // the wrapper's private dispatch queue (the OS callback thread) and
+    // its bool return is the verdict (true = allow, false = deny).
+    //
+    // When set to approval::bounded<disk_info>, the predicate runs on a
+    // worker thread with a wrapper-enforced timeout; if it overruns, the
+    // wrapper returns `on_timeout_allow` to DA and signals the predicate
+    // via its `stdexec::inplace_stop_token`. See
+    // `examples/approval_policy.hpp`.
+    approval_policy mount_approval{};
+    approval_policy unmount_approval{};
+    approval_policy eject_approval{};
   };
 
   class da_context;
@@ -136,6 +171,39 @@ namespace dax
       if (__path)
         CFRelease(__path);
       return __s;
+    }
+
+    inline auto __make_disk_info(DADiskRef __disk) -> disk_info
+    {
+      disk_info __i;
+      if (char const * __bsd = DADiskGetBSDName(__disk))
+        __i.bsd_name = std::string{__bsd};
+
+      if (CFDictionaryRef __desc = DADiskCopyDescription(__disk))
+      {
+        if (auto __name = static_cast<CFStringRef>(
+              CFDictionaryGetValue(__desc, kDADiskDescriptionVolumeNameKey)))
+          __i.volume_name = __cfstring_to_string(__name);
+        if (auto __path = static_cast<CFURLRef>(
+              CFDictionaryGetValue(__desc, kDADiskDescriptionVolumePathKey)))
+          __i.volume_path = __cfurl_to_string(__path);
+        CFRelease(__desc);
+      }
+      return __i;
+    }
+
+    // Translate a bool verdict into DA's expected return type.
+    // nullptr = allow; a non-NULL DADissenterRef vetoes the operation.
+    // The dissenter is owned by DA after return; the registered status
+    // (kDAReturnNotPermitted) and reason string surface in `diskutil`
+    // and the system log, so the user can tell *who* vetoed.
+    inline auto __verdict_to_dissenter(bool __allow) noexcept -> DADissenterRef
+    {
+      if (__allow)
+        return nullptr;
+      return DADissenterCreate(kCFAllocatorDefault,
+                               kDAReturnNotPermitted,
+                               CFSTR("denied by dax::watch_options approval policy"));
     }
 
     inline auto
@@ -287,6 +355,43 @@ namespace dax
           __make_disk_event(disk_event_kind::description_changed, __disk, __keys));
       }
 
+      // Approval callbacks. Signature: synchronous return of DADissenterRef
+      // (NULL = allow). All three share the same shape: resolve the configured
+      // policy via the helper, lazily building disk_info only if the policy
+      // actually needs it.
+      static auto __on_mount_approval_cb(DADiskRef __disk, void* __ctx) noexcept -> DADissenterRef
+      {
+        auto*      __self  = static_cast<__op*>(__ctx);
+        bool const __allow = approval::resolve_verdict<disk_info>(__self->__opts_.mount_approval,
+                                                                  [&]
+                                                                  {
+                                                                    return __make_disk_info(__disk);
+                                                                  });
+        return __verdict_to_dissenter(__allow);
+      }
+
+      static auto __on_unmount_approval_cb(DADiskRef __disk, void* __ctx) noexcept -> DADissenterRef
+      {
+        auto*      __self  = static_cast<__op*>(__ctx);
+        bool const __allow = approval::resolve_verdict<disk_info>(__self->__opts_.unmount_approval,
+                                                                  [&]
+                                                                  {
+                                                                    return __make_disk_info(__disk);
+                                                                  });
+        return __verdict_to_dissenter(__allow);
+      }
+
+      static auto __on_eject_approval_cb(DADiskRef __disk, void* __ctx) noexcept -> DADissenterRef
+      {
+        auto*      __self  = static_cast<__op*>(__ctx);
+        bool const __allow = approval::resolve_verdict<disk_info>(__self->__opts_.eject_approval,
+                                                                  [&]
+                                                                  {
+                                                                    return __make_disk_info(__disk);
+                                                                  });
+        return __verdict_to_dissenter(__allow);
+      }
+
       void start() & noexcept
       {
         __session_ = DASessionCreate(kCFAllocatorDefault);
@@ -401,6 +506,27 @@ namespace dax
                                                    &__on_desc_changed_cb,
                                                    __self_as_void);
         }
+        if (__opts_.mount_approval.index() != 0)
+        {
+          DARegisterDiskMountApprovalCallback(__session_,
+                                              /*match=*/__match_dict_,
+                                              &__on_mount_approval_cb,
+                                              __self_as_void);
+        }
+        if (__opts_.unmount_approval.index() != 0)
+        {
+          DARegisterDiskUnmountApprovalCallback(__session_,
+                                                /*match=*/__match_dict_,
+                                                &__on_unmount_approval_cb,
+                                                __self_as_void);
+        }
+        if (__opts_.eject_approval.index() != 0)
+        {
+          DARegisterDiskEjectApprovalCallback(__session_,
+                                              /*match=*/__match_dict_,
+                                              &__on_eject_approval_cb,
+                                              __self_as_void);
+        }
 
         DASessionSetDispatchQueue(__session_, __queue_);
 
@@ -505,6 +631,24 @@ namespace dax
         {
           DAUnregisterCallback(__session_,
                                reinterpret_cast<void*>(&__on_desc_changed_cb),
+                               __self_as_void);
+        }
+        if (__opts_.mount_approval.index() != 0)
+        {
+          DAUnregisterCallback(__session_,
+                               reinterpret_cast<void*>(&__on_mount_approval_cb),
+                               __self_as_void);
+        }
+        if (__opts_.unmount_approval.index() != 0)
+        {
+          DAUnregisterCallback(__session_,
+                               reinterpret_cast<void*>(&__on_unmount_approval_cb),
+                               __self_as_void);
+        }
+        if (__opts_.eject_approval.index() != 0)
+        {
+          DAUnregisterCallback(__session_,
+                               reinterpret_cast<void*>(&__on_eject_approval_cb),
                                __self_as_void);
         }
         if (__desc_keys_array_)

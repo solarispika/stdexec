@@ -130,6 +130,23 @@ if(STDEXEC_ENABLE_WINDOWS_THREAD_POOL AND WIN32)
     catch_discover_tests(test.velx_wrapper PROPERTIES TIMEOUT 30)
 endif()
 
+# examples/approval_policy.hpp is header-only, std-lib-only (variant +
+# stop_token + future + thread). Cross-platform, no OS framework deps —
+# tested on every platform we build on. Same posture as the other example
+# wrappers: deliberately not linking common_test_settings to keep
+# STDEXEC_NAMESPACE=stdexec for user-facing example code.
+add_executable(test.approval_policy test_approval_policy.cpp)
+set_target_properties(test.approval_policy PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+target_link_libraries(test.approval_policy
+    PRIVATE
+    STDEXEC::stdexec
+    stdexec_executable_flags
+    Catch2::Catch2WithMain)
+catch_discover_tests(test.approval_policy PROPERTIES TIMEOUT 30)
+
 if(STDEXEC_ENABLE_ASIO)
     add_subdirectory(asio)
 endif()

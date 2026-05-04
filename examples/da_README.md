@@ -46,6 +46,41 @@ Each `disk_event` carries `kind` (one of `appeared` / `disappeared` /
 `description_changed`). All strings are owned (deep-copied from the
 CFString contents during the callback).
 
+### Pre-removal hook (approval callbacks)
+
+DA's approval callbacks (mount / unmount / eject) let a listener
+veto an operation by returning a non-NULL `DADissenterRef`. The
+wrapper exposes them via three `watch_options` fields, each a
+`dax::approval_policy` (= `approval::policy<dax::disk_info>`):
+
+```cpp
+dax::watch_options opts{};
+opts.unmount_approval = approval::sync<dax::disk_info>{
+  .predicate = [](dax::disk_info const& info) {
+    do_my_cleanup(info);   // synchronous; runs on DA's dispatch queue
+    return true;           // allow; return false to veto
+  },
+};
+```
+
+For predicates that may legitimately block (service shutdown,
+file-flush waits) use `approval::bounded` so the wrapper enforces a
+timeout and falls back to `on_timeout_allow` if the worker overruns:
+
+```cpp
+opts.unmount_approval = approval::bounded<dax::disk_info>{
+  .predicate = [](dax::disk_info const& info, stdexec::inplace_stop_token tok) {
+    return stop_services_for(info, tok);   // bail out via tok.stop_requested()
+  },
+  .timeout          = std::chrono::seconds{4},
+  .on_timeout_allow = true,
+};
+```
+
+The default-constructed value is `std::monostate` — the wrapper
+does not register the callback at all, so DA proceeds with no input
+from this listener (matching v1 behavior).
+
 ## Queue selection / scheduler
 
 The wrapper does not own a dispatch queue. The queue is selected at the
@@ -139,17 +174,23 @@ FSEvents.
 | **Initial replay** | On registration, DA fires `DiskAppearedCallback` for **every disk currently visible** to the daemon (every BSD device, every mounted volume, every network share that DA tracks). This is documented behavior. The demo prints ~30 `appeared` events before the sparseimage one. If you only want *new* disks, dedupe against an initial snapshot. |
 | **`bsd_name` may be empty** | `DADiskGetBSDName` returns `NULL` for non-BSD disks (some network volumes). The wrapper stores an empty `bsd_name` in that case rather than throwing. |
 | **`volume_path` may be missing** | A disk that exists but is not mounted has no `kDADiskDescriptionVolumePathKey`. `volume_path` is `std::nullopt`. The sparseimage in the demo is attached with `-nomount`, so `appeared`/`disappeared` for it carry no path. |
-| **Approval callbacks not wired** | `DARegisterDiskMountApprovalCallback` and friends require the consumer to *answer* each event by returning a `DADissenterRef`. Not modeled in v1; see "Things deliberately NOT done". |
+| **Approval callbacks** | `DARegisterDiskMountApprovalCallback` and friends require the consumer to *answer* each event with a `DADissenterRef` (NULL = allow). Modeled separately from the notification stream because the contract is request/response: configure `watch_options::{mount,unmount,eject}_approval` with an `approval::sync<dax::disk_info>` (predicate runs inline on the wrapper's dispatch queue) or `approval::bounded<dax::disk_info>` (predicate runs on a worker, wrapper enforces a timeout, falls back to `on_timeout_allow`). The default `monostate` skips the registration entirely — DA proceeds with no input from this listener. See `examples/approval_policy.hpp`. |
 | **`description_changed` is opt-in** | Off by default — it can be very noisy (filesystem state changes, mount/unmount transitions all fire it). Set `watch_options::watch_description_changed = true` if you actually want it. To narrow which keys trigger the callback, populate `watch_options::description_keys` with the raw key strings (e.g. `"DAVolumeName"`, `"DAVolumePath"` — same shape as `disk_event::changed_keys`); an empty vector (default) keeps DA's "watch all keys" behavior. |
 | **Match dictionary** | Populate `watch_options::match` to narrow which disks fire callbacks (forwarded as the `match` `CFDictionaryRef` to all three `DARegister*Callback` calls). Keys are the raw DA description key strings — same shape as `description_keys` — and values are `bool` (CFBoolean keys, e.g. `{"DAMediaWhole", true}`) or `std::string` (CFString keys, e.g. `{"DAVolumeKind", "apfs"}`). Empty (default) = match every disk. |
 
 ## Things deliberately NOT done
 
-- **Approval callbacks** (mount/unmount/eject/peek). They are
-  request/response — the C callback returns a `DADissenterRef` (or
-  `NULL` to allow). A `sequence_sender` whose item is fire-and-forget
-  does not naturally express this. A future PR can decide between a
-  request/response sender pair and a per-event ack object.
+- **Peek approval** (`DARegisterDiskPeekCallback`). Same shape as the
+  three approval verbs we do support, but the use cases are narrow
+  enough that nobody has asked. Add as a fourth `watch_options` field
+  if needed.
+- **Dual-session HOL isolation.** Approval callbacks share the
+  notification dispatch queue today, so a slow notification consumer
+  can delay an approval callback for an unrelated disk. Workaround:
+  open a second `da_context` purely for approval — they run on
+  independent DA sessions, independent queues. A future flag could
+  bake this in (`watch_options::isolate_approval_queue`), but the
+  workaround is cheap and the default keeps the wrapper simpler.
 - **Multi-subscriber fan-out** on a single `da_context`. The
   `__active_` slot is single-shot CAS-guarded; a second concurrent
   `subscribe` fails with `set_error`. For fan-out, build a layer on top.
