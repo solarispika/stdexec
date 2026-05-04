@@ -102,6 +102,13 @@ if (APPLE)
               stdexec_executable_flags
               "-framework DiskArbitration"
               "-framework CoreFoundation")
+
+  add_executable(example.powerx powerx.cpp)
+  target_link_libraries(example.powerx
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              "-framework IOKit"
+              "-framework CoreFoundation")
 endif ()
 
 if (WIN32)
@@ -120,6 +127,12 @@ if (WIN32)
       PRIVATE STDEXEC::stdexec
               stdexec_executable_flags
               cfgmgr32)
+
+  add_executable(example.powerx powerx.cpp)
+  target_link_libraries(example.powerx
+      PRIVATE STDEXEC::stdexec
+              stdexec_executable_flags
+              powrprof)
 endif ()
 
 foreach(example ${stdexec_examples})
