@@ -49,9 +49,9 @@ using namespace std::chrono_literals;
 
 namespace
 {
-  auto kind_str(udx::device_kind __k) noexcept -> char const *
+  auto kind_str(udx::device_kind k) noexcept -> char const *
   {
-    switch (__k)
+    switch (k)
     {
     case udx::device_kind::add:
       return "add";
@@ -83,31 +83,31 @@ auto main() -> int
   std::printf("  sudo dmsetup create udx_test --table '0 1 zero'             # real add\n");
   std::printf("  sudo dmsetup remove udx_test                                # real remove\n\n");
 
-  exec::io_uring_context __ring;
-  std::thread            __driver{[&] { __ring.run_until_stopped(); }};
+  exec::io_uring_context ring;
+  std::thread            driver{[&] { ring.run_until_stopped(); }};
 
-  udx::udev_context __ctx;
+  udx::udev_context ctx;
 
-  exec::static_thread_pool __pool{1};
-  auto                     __sched = __pool.get_scheduler();
+  exec::static_thread_pool pool{1};
+  auto                     sched = pool.get_scheduler();
   stdexec::sync_wait(exec::when_any(
-    stdexec::starts_on(__sched, stdexec::just())
+    stdexec::starts_on(sched, stdexec::just())
       | stdexec::then([&] { std::this_thread::sleep_for(30s); }),
-    exec::sequence_with_scheduler(__ring.get_scheduler(),
-                                  __ctx.watch({.subsystem = "block", .initial_replay = true}))
+    exec::sequence_with_scheduler(ring.get_scheduler(),
+                                  ctx.watch({.subsystem = "block", .initial_replay = true}))
       | exec::transform_each(stdexec::then(
-        [](udx::device_event __e)
+        [](udx::device_event e)
         {
           std::printf("[%-7s] %s/%s sysname=%s devnode=%s\n",
-                      kind_str(__e.kind),
-                      __e.subsystem.c_str(),
-                      __e.devtype.c_str(),
-                      __e.sysname.c_str(),
-                      __e.devnode ? __e.devnode->c_str() : "(none)");
+                      kind_str(e.kind),
+                      e.subsystem.c_str(),
+                      e.devtype.c_str(),
+                      e.sysname.c_str(),
+                      e.devnode ? e.devnode->c_str() : "(none)");
         }))
       | exec::ignore_all_values()));
 
-  __ring.request_stop();
-  __driver.join();
+  ring.request_stop();
+  driver.join();
   return 0;
 }

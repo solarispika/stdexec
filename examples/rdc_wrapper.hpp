@@ -73,118 +73,118 @@ namespace rdcx
 
   class rdc_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base()                    = default;
+      virtual ~op_base()                    = default;
       virtual void deliver(fs_batch) noexcept = 0;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver;
+    template <class Rcvr>
+    struct next_receiver;
 
-    struct __watch_sender;
-  }  // namespace __detail
+    struct watch_sender;
+  }  // namespace detail
 
   class rdc_context
   {
    public:
-    explicit rdc_context(std::wstring __path)
-      : __path_{std::move(__path)}
+    explicit rdc_context(std::wstring path)
+      : path_{std::move(path)}
     {}
 
     rdc_context(rdc_context const &)                    = delete;
     auto operator=(rdc_context const &) -> rdc_context& = delete;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    template <class _Rcvr>
-    friend struct __detail::__next_receiver;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    template <class Rcvr>
+    friend struct detail::next_receiver;
+    friend struct detail::watch_sender;
 
-    std::wstring                      __path_;
-    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::wstring                      path_;
+    std::atomic<detail::op_base*> active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<fs_batch>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<fs_batch>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept;
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      rdc_context*                     __ctx_;
-      watch_options                    __opts_;
-      _Rcvr                            __rcvr_;
-      HANDLE                           __dir_{INVALID_HANDLE_VALUE};
-      HANDLE                           __ovl_event_{nullptr};
-      OVERLAPPED                       __ovl_{};
-      std::vector<DWORD>               __buffer_;  // DWORD-aligned storage
-      std::vector<fs_event>            __staging_;
-      std::thread                      __thread_;
-      std::atomic<bool>                __stop_requested_{false};
-      std::binary_semaphore            __delivery_done_{0};
-      int                              __delivery_state_{0};  // 1=value, 2=stopped, 3=error
-      std::exception_ptr               __error_;
-      std::optional<__stop_callback_t> __stop_cb_;
-      std::unique_ptr<__next_op_t>     __next_op_;
+      rdc_context*                     ctx_;
+      watch_options                    opts_;
+      Rcvr                            rcvr_;
+      HANDLE                           dir_{INVALID_HANDLE_VALUE};
+      HANDLE                           ovl_event_{nullptr};
+      OVERLAPPED                       ovl_{};
+      std::vector<DWORD>               buffer_;  // DWORD-aligned storage
+      std::vector<fs_event>            staging_;
+      std::thread                      thread_;
+      std::atomic<bool>                stop_requested_{false};
+      std::binary_semaphore            delivery_done_{0};
+      int                              delivery_state_{0};  // 1=value, 2=stopped, 3=error
+      std::exception_ptr               error_;
+      std::optional<stop_callback_t> stop_cb_;
+      std::unique_ptr<next_op_t>     next_op_;
 
-      explicit __op(rdc_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{__o}
-        , __rcvr_{std::move(__r)}
+      explicit op(rdc_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{o}
+        , rcvr_{std::move(r)}
       {}
 
       void start() & noexcept
       {
-        __dir_ = CreateFileW(__ctx_->__path_.c_str(),
+        dir_ = CreateFileW(ctx_->path_.c_str(),
                              FILE_LIST_DIRECTORY,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              nullptr,
                              OPEN_EXISTING,
                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
                              nullptr);
-        if (__dir_ == INVALID_HANDLE_VALUE)
+        if (dir_ == INVALID_HANDLE_VALUE)
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(
                                std::system_error{static_cast<int>(GetLastError()),
                                                  std::system_category(),
@@ -192,98 +192,98 @@ namespace rdcx
           return;
         }
 
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          CloseHandle(__dir_);
-          __dir_ = INVALID_HANDLE_VALUE;
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          CloseHandle(dir_);
+          dir_ = INVALID_HANDLE_VALUE;
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"rdc_context already has "
                                                                         "an active watch"}));
           return;
         }
 
-        __ovl_event_ = CreateEventW(nullptr,
+        ovl_event_ = CreateEventW(nullptr,
                                     /*bManualReset*/ FALSE,
                                     /*bInitialState*/ FALSE,
                                     nullptr);
-        if (!__ovl_event_)
+        if (!ovl_event_)
         {
-          DWORD __e = GetLastError();
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          CloseHandle(__dir_);
-          __dir_ = INVALID_HANDLE_VALUE;
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+          DWORD e = GetLastError();
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          CloseHandle(dir_);
+          dir_ = INVALID_HANDLE_VALUE;
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(e),
                                                                        std::system_category(),
                                                                        "CreateEventW"}));
           return;
         }
 
-        std::size_t const __dwords = (__opts_.buffer_size + sizeof(DWORD) - 1) / sizeof(DWORD);
+        std::size_t const dwords = (opts_.buffer_size + sizeof(DWORD) - 1) / sizeof(DWORD);
         try
         {
-          __buffer_.resize(__dwords);
+          buffer_.resize(dwords);
         }
         catch (...)
         {
-          CloseHandle(__ovl_event_);
-          __ovl_event_ = nullptr;
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          CloseHandle(__dir_);
-          __dir_ = INVALID_HANDLE_VALUE;
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), std::current_exception());
+          CloseHandle(ovl_event_);
+          ovl_event_ = nullptr;
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          CloseHandle(dir_);
+          dir_ = INVALID_HANDLE_VALUE;
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_), std::current_exception());
           return;
         }
 
         try
         {
-          __thread_ = std::thread{[this] { this->__run_loop(); }};
+          thread_ = std::thread{[this] { this->run_loop(); }};
         }
         catch (...)
         {
-          CloseHandle(__ovl_event_);
-          __ovl_event_ = nullptr;
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          CloseHandle(__dir_);
-          __dir_ = INVALID_HANDLE_VALUE;
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), std::current_exception());
+          CloseHandle(ovl_event_);
+          ovl_event_ = nullptr;
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          CloseHandle(dir_);
+          dir_ = INVALID_HANDLE_VALUE;
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_), std::current_exception());
           return;
         }
 
         // Register stop callback last; if the token is already in stop state
         // it fires synchronously, which is now safe because the worker is up.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
 
       // Runs on the dedicated worker thread.
-      void __run_loop() noexcept
+      void run_loop() noexcept
       {
-        const DWORD __byte_size = static_cast<DWORD>(__buffer_.size() * sizeof(DWORD));
+        const DWORD byte_size = static_cast<DWORD>(buffer_.size() * sizeof(DWORD));
 
-        while (!__stop_requested_.load(std::memory_order_acquire))
+        while (!stop_requested_.load(std::memory_order_acquire))
         {
-          __ovl_         = OVERLAPPED{};
-          __ovl_.hEvent  = __ovl_event_;
-          DWORD __unused = 0;
+          ovl_         = OVERLAPPED{};
+          ovl_.hEvent  = ovl_event_;
+          DWORD unused = 0;
 
-          BOOL __ok = ReadDirectoryChangesW(__dir_,
-                                            __buffer_.data(),
-                                            __byte_size,
-                                            __opts_.watch_subtree ? TRUE : FALSE,
-                                            __opts_.filter,
-                                            &__unused,
-                                            &__ovl_,
+          BOOL ok = ReadDirectoryChangesW(dir_,
+                                            buffer_.data(),
+                                            byte_size,
+                                            opts_.watch_subtree ? TRUE : FALSE,
+                                            opts_.filter,
+                                            &unused,
+                                            &ovl_,
                                             nullptr);
-          if (!__ok)
+          if (!ok)
           {
-            DWORD __err = GetLastError();
-            if (__stop_requested_.load(std::memory_order_acquire))
+            DWORD err = GetLastError();
+            if (stop_requested_.load(std::memory_order_acquire))
             {
-              __finish_stopped();
+              finish_stopped();
               return;
             }
-            __finish_error(std::make_exception_ptr(std::system_error{static_cast<int>(__err),
+            finish_error(std::make_exception_ptr(std::system_error{static_cast<int>(err),
                                                                      std::system_category(),
                                                                      "ReadDirectoryChangesW"}));
             return;
@@ -291,23 +291,23 @@ namespace rdcx
 
           // If a stop request raced ahead of the call, cancel right away so
           // GetOverlappedResult below returns ERROR_OPERATION_ABORTED.
-          if (__stop_requested_.load(std::memory_order_acquire))
+          if (stop_requested_.load(std::memory_order_acquire))
           {
-            CancelIoEx(__dir_, &__ovl_);
+            CancelIoEx(dir_, &ovl_);
           }
 
-          DWORD __got = 0;
-          BOOL  __res = GetOverlappedResult(__dir_, &__ovl_, &__got, /*bWait*/ TRUE);
-          if (!__res)
+          DWORD got = 0;
+          BOOL  res = GetOverlappedResult(dir_, &ovl_, &got, /*bWait*/ TRUE);
+          if (!res)
           {
-            DWORD __err = GetLastError();
-            if (__err == ERROR_OPERATION_ABORTED
-                || __stop_requested_.load(std::memory_order_acquire))
+            DWORD err = GetLastError();
+            if (err == ERROR_OPERATION_ABORTED
+                || stop_requested_.load(std::memory_order_acquire))
             {
-              __finish_stopped();
+              finish_stopped();
               return;
             }
-            __finish_error(std::make_exception_ptr(std::system_error{static_cast<int>(__err),
+            finish_error(std::make_exception_ptr(std::system_error{static_cast<int>(err),
                                                                      std::system_category(),
                                                                      "GetOverlappedResult"}));
             return;
@@ -315,115 +315,115 @@ namespace rdcx
 
           // got == 0 with success means the kernel buffer was too small; all
           // events for this window are gone.
-          bool const __overflow = (__got == 0);
-          __staging_.clear();
-          if (!__overflow)
+          bool const overflow = (got == 0);
+          staging_.clear();
+          if (!overflow)
           {
-            auto const * __raw = reinterpret_cast<std::byte const *>(__buffer_.data());
-            std::size_t  __off = 0;
-            while (__off < __got)
+            auto const * raw = reinterpret_cast<std::byte const *>(buffer_.data());
+            std::size_t  off = 0;
+            while (off < got)
             {
-              auto const * __fni = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(__raw + __off);
-              std::size_t const __chars = __fni->FileNameLength / sizeof(WCHAR);
-              __staging_.push_back({
-                std::wstring{__fni->FileName, __chars},
-                __fni->Action
+              auto const * fni = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(raw + off);
+              std::size_t const chars = fni->FileNameLength / sizeof(WCHAR);
+              staging_.push_back({
+                std::wstring{fni->FileName, chars},
+                fni->Action
               });
-              if (__fni->NextEntryOffset == 0)
+              if (fni->NextEntryOffset == 0)
                 break;
-              __off += __fni->NextEntryOffset;
+              off += fni->NextEntryOffset;
             }
           }
-          fs_batch __batch{__staging_, __overflow};
-          deliver(__batch);
+          fs_batch batch{staging_, overflow};
+          deliver(batch);
 
-          if (__delivery_state_ == 2)
+          if (delivery_state_ == 2)
           {
-            __finish_stopped();
+            finish_stopped();
             return;
           }
-          if (__delivery_state_ == 3)
+          if (delivery_state_ == 3)
           {
-            __finish_error(std::move(__error_));
+            finish_error(std::move(error_));
             return;
           }
         }
 
-        __finish_stopped();
+        finish_stopped();
       }
 
-      // Called from __run_loop on the worker thread.
-      void deliver(fs_batch __batch) noexcept override
+      // Called from run_loop on the worker thread.
+      void deliver(fs_batch batch) noexcept override
       {
-        __delivery_state_ = 0;
+        delivery_state_ = 0;
 
         try
         {
-          __next_op_.reset(
-            new __next_op_t(stdexec::connect(exec::set_next(__rcvr_, stdexec::just(__batch)),
-                                             __next_receiver_t{this})));
-          stdexec::start(*__next_op_);
+          next_op_.reset(
+            new next_op_t(stdexec::connect(exec::set_next(rcvr_, stdexec::just(batch)),
+                                             next_receiver_t{this})));
+          stdexec::start(*next_op_);
         }
         catch (...)
         {
-          __error_          = std::current_exception();
-          __delivery_state_ = 3;
-          __delivery_done_.release();
+          error_          = std::current_exception();
+          delivery_state_ = 3;
+          delivery_done_.release();
         }
 
-        __delivery_done_.acquire();
-        __next_op_.reset();
+        delivery_done_.acquire();
+        next_op_.reset();
       }
 
-      void __teardown() noexcept
+      void teardown() noexcept
       {
         // Drop the stop callback first so any in-flight invocation finishes
         // before we close the handles it might touch (CancelIoEx).
-        __stop_cb_.reset();
-        if (__dir_ != INVALID_HANDLE_VALUE)
+        stop_cb_.reset();
+        if (dir_ != INVALID_HANDLE_VALUE)
         {
-          CloseHandle(__dir_);
-          __dir_ = INVALID_HANDLE_VALUE;
+          CloseHandle(dir_);
+          dir_ = INVALID_HANDLE_VALUE;
         }
-        if (__ovl_event_)
+        if (ovl_event_)
         {
-          CloseHandle(__ovl_event_);
-          __ovl_event_ = nullptr;
+          CloseHandle(ovl_event_);
+          ovl_event_ = nullptr;
         }
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        ctx_->active_.store(nullptr, std::memory_order_release);
       }
 
-      // Both __finish_* run on the worker thread as the last step before
+      // Both finish_* run on the worker thread as the last step before
       // the thread function returns. We detach the thread before completing
       // the receiver so the op state's destructor (potentially triggered by
       // the receiver completion) does not std::terminate on a joinable thread.
-      void __finish_stopped() noexcept
+      void finish_stopped() noexcept
       {
-        __teardown();
-        auto __local = static_cast<_Rcvr&&>(__rcvr_);
-        __thread_.detach();
-        stdexec::set_stopped(std::move(__local));
+        teardown();
+        auto local = static_cast<Rcvr&&>(rcvr_);
+        thread_.detach();
+        stdexec::set_stopped(std::move(local));
       }
 
-      void __finish_error(std::exception_ptr __ep) noexcept
+      void finish_error(std::exception_ptr ep) noexcept
       {
-        __teardown();
-        auto __local = static_cast<_Rcvr&&>(__rcvr_);
-        __thread_.detach();
-        stdexec::set_error(std::move(__local), std::move(__ep));
+        teardown();
+        auto local = static_cast<Rcvr&&>(rcvr_);
+        thread_.detach();
+        stdexec::set_error(std::move(local), std::move(ep));
       }
     };
 
-    template <class _Rcvr>
-    void __op<_Rcvr>::__on_stop_fn::operator()() noexcept
+    template <class Rcvr>
+    void op<Rcvr>::on_stop_fn::operator()() noexcept
     {
-      __self_->__stop_requested_.store(true, std::memory_order_release);
+      self_->stop_requested_.store(true, std::memory_order_release);
       // CancelIoEx on a handle without a pending IO returns ERROR_NOT_FOUND;
-      // that's harmless — the worker thread re-checks __stop_requested_ after
+      // that's harmless — the worker thread re-checks stop_requested_ after
       // posting Read and will cancel itself if it raced ahead.
-      if (__self_->__dir_ != INVALID_HANDLE_VALUE)
+      if (self_->dir_ != INVALID_HANDLE_VALUE)
       {
-        CancelIoEx(__self_->__dir_, &__self_->__ovl_);
+        CancelIoEx(self_->dir_, &self_->ovl_);
       }
       // If the worker is currently semaphore-blocked in deliver(), downstream
       // stop_token propagation must complete the next sender (typically with
@@ -431,44 +431,44 @@ namespace rdcx
       // deadlocks holding the semaphore — same caveat as fsevents_wrapper.
     }
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__delivery_state_ = 1;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 1;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__delivery_state_ = 2;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 2;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
       {
-        __self_->__error_ = std::forward<_E>(__e);
+        self_->error_ = std::forward<E>(e);
       }
       else
       {
-        __self_->__error_ = std::make_exception_ptr(std::forward<_E>(__e));
+        self_->error_ = std::make_exception_ptr(std::forward<E>(e));
       }
-      __self_->__delivery_state_ = 3;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 3;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -476,22 +476,22 @@ namespace rdcx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      rdc_context*  __ctx_;
-      watch_options __opts_;
+      rdc_context*  ctx_;
+      watch_options opts_;
 
-      template <stdexec::receiver _Rcvr>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      template <stdexec::receiver Rcvr>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
-  inline auto rdc_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto rdc_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, __opts};
+    return {this, opts};
   }
 }  // namespace rdcx

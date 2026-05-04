@@ -89,28 +89,28 @@ namespace powerx
 
   class power_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base() = default;
+      virtual ~op_base() = default;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver;
+    template <class Rcvr>
+    struct next_receiver;
 
-    struct __watch_sender;
+    struct watch_sender;
 
-    enum __finish_kind : int
+    enum finish_kind : int
     {
-      __finish_none    = 0,
-      __finish_stopped = 1,
-      __finish_error   = 2,
+      finish_none    = 0,
+      finish_stopped = 1,
+      finish_error   = 2,
     };
-  }  // namespace __detail
+  }  // namespace detail
 
   class power_context
   {
@@ -121,121 +121,121 @@ namespace powerx
     power_context(power_context const &)                    = delete;
     auto operator=(power_context const &) -> power_context& = delete;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    template <class _Rcvr>
-    friend struct __detail::__next_receiver;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    template <class Rcvr>
+    friend struct detail::next_receiver;
+    friend struct detail::watch_sender;
 
-    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::atomic<detail::op_base*> active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<power_event>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<power_event>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      power_context*      __ctx_;
-      watch_options       __opts_;
-      _Rcvr               __rcvr_;
-      TP_CALLBACK_ENVIRON __env_{};
-      HPOWERNOTIFY        __hnotify_{nullptr};
-      PTP_WORK            __drainer_work_{nullptr};
-      PTP_WORK            __cleanup_work_{nullptr};
+      power_context*      ctx_;
+      watch_options       opts_;
+      Rcvr               rcvr_;
+      TP_CALLBACK_ENVIRON env_{};
+      HPOWERNOTIFY        hnotify_{nullptr};
+      PTP_WORK            drainer_work_{nullptr};
+      PTP_WORK            cleanup_work_{nullptr};
 
       // MPSC queue (system thread → drainer pool work item).
-      std::mutex              __queue_mu_;
-      std::deque<power_event> __queue_;
-      std::atomic<bool>       __drainer_running_{false};
+      std::mutex              queue_mu_;
+      std::deque<power_event> queue_;
+      std::atomic<bool>       drainer_running_{false};
 
-      std::binary_semaphore __delivery_done_{0};
-      int                   __delivery_state_{0};  // 1=value 2=stopped 3=error
+      std::binary_semaphore delivery_done_{0};
+      int                   delivery_state_{0};  // 1=value 2=stopped 3=error
 
-      std::atomic<bool>            __stop_requested_{false};
-      __finish_kind                __finish_kind_{__finish_none};
-      std::exception_ptr           __error_;
-      std::unique_ptr<__next_op_t> __next_op_;
+      std::atomic<bool>            stop_requested_{false};
+      finish_kind                finish_kind_{finish_none};
+      std::exception_ptr           error_;
+      std::unique_ptr<next_op_t> next_op_;
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept
         {
-          __self_->__stop_requested_.store(true, std::memory_order_release);
-          __self_->__schedule_cleanup(__finish_stopped);
+          self_->stop_requested_.store(true, std::memory_order_release);
+          self_->schedule_cleanup(finish_stopped);
         }
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      std::atomic<bool>                __cleanup_scheduled_{false};
-      std::optional<__stop_callback_t> __stop_cb_;
+      std::atomic<bool>                cleanup_scheduled_{false};
+      std::optional<stop_callback_t> stop_cb_;
 
-      explicit __op(power_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{__o}
-        , __rcvr_{std::move(__r)}
+      explicit op(power_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{o}
+        , rcvr_{std::move(r)}
       {
-        InitializeThreadpoolEnvironment(&__env_);
-        auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
-        SetThreadpoolCallbackPool(&__env_, __sched.native_handle());
+        InitializeThreadpoolEnvironment(&env_);
+        auto sched = stdexec::get_scheduler(stdexec::get_env(rcvr_));
+        SetThreadpoolCallbackPool(&env_, sched.native_handle());
       }
 
-      ~__op() override
+      ~op() override
       {
-        if (__hnotify_)
-          ::PowerUnregisterSuspendResumeNotification(__hnotify_);
-        if (__drainer_work_)
-          CloseThreadpoolWork(__drainer_work_);
-        if (__cleanup_work_)
-          CloseThreadpoolWork(__cleanup_work_);
-        DestroyThreadpoolEnvironment(&__env_);
+        if (hnotify_)
+          ::PowerUnregisterSuspendResumeNotification(hnotify_);
+        if (drainer_work_)
+          CloseThreadpoolWork(drainer_work_);
+        if (cleanup_work_)
+          CloseThreadpoolWork(cleanup_work_);
+        DestroyThreadpoolEnvironment(&env_);
       }
 
       // Notification callback. Runs on a system worker thread we don't
       // own — must NOT block. Push to MPSC and kick the drainer.
-      static auto WINAPI __power_callback(PVOID __ctx, ULONG __type, PVOID /*setting*/) -> ULONG
+      static auto WINAPI power_callback(PVOID ctx, ULONG type, PVOID /*setting*/) -> ULONG
       {
-        auto* __self = static_cast<__op*>(__ctx);
+        auto* self = static_cast<op*>(ctx);
 
-        std::optional<power_event> __ev;
-        switch (__type)
+        std::optional<power_event> ev;
+        switch (type)
         {
         case PBT_APMSUSPEND:
-          if (__self->__opts_.watch_suspend)
-            __ev = power_event{power_event_kind::suspend};
+          if (self->opts_.watch_suspend)
+            ev = power_event{power_event_kind::suspend};
           break;
         case PBT_APMRESUMEAUTOMATIC:
-          if (__self->__opts_.watch_resume)
-            __ev = power_event{power_event_kind::resume};
+          if (self->opts_.watch_resume)
+            ev = power_event{power_event_kind::resume};
           break;
         // Other PBT_* (POWERSTATUSCHANGE, BATTERYLOW, RESUMECRITICAL,
         // POWERSETTINGCHANGE, ...) intentionally ignored in v1.
@@ -243,215 +243,215 @@ namespace powerx
           break;
         }
 
-        if (!__ev)
+        if (!ev)
           return ERROR_SUCCESS;
 
-        bool __submit = false;
+        bool submit = false;
         {
-          std::lock_guard __lk{__self->__queue_mu_};
-          if (__self->__stop_requested_.load(std::memory_order_acquire))
+          std::lock_guard lk{self->queue_mu_};
+          if (self->stop_requested_.load(std::memory_order_acquire))
             return ERROR_SUCCESS;
-          __self->__queue_.push_back(std::move(*__ev));
-          __submit = !__self->__drainer_running_.exchange(true, std::memory_order_acq_rel);
+          self->queue_.push_back(std::move(*ev));
+          submit = !self->drainer_running_.exchange(true, std::memory_order_acq_rel);
         }
-        if (__submit)
-          SubmitThreadpoolWork(__self->__drainer_work_);
+        if (submit)
+          SubmitThreadpoolWork(self->drainer_work_);
         return ERROR_SUCCESS;
       }
 
-      static void CALLBACK __drainer_callback(PTP_CALLBACK_INSTANCE,
-                                              void* __ctx_ptr,
+      static void CALLBACK drainer_callback(PTP_CALLBACK_INSTANCE,
+                                              void* ctx_ptr,
                                               PTP_WORK) noexcept
       {
-        auto* __self = static_cast<__op*>(__ctx_ptr);
+        auto* self = static_cast<op*>(ctx_ptr);
         for (;;)
         {
-          power_event __ev{};
+          power_event ev{};
           {
-            std::lock_guard __lk{__self->__queue_mu_};
-            if (__self->__stop_requested_.load(std::memory_order_acquire))
+            std::lock_guard lk{self->queue_mu_};
+            if (self->stop_requested_.load(std::memory_order_acquire))
             {
-              __self->__drainer_running_.store(false, std::memory_order_release);
+              self->drainer_running_.store(false, std::memory_order_release);
               break;
             }
-            if (__self->__queue_.empty())
+            if (self->queue_.empty())
             {
-              __self->__drainer_running_.store(false, std::memory_order_release);
+              self->drainer_running_.store(false, std::memory_order_release);
               return;
             }
-            __ev = std::move(__self->__queue_.front());
-            __self->__queue_.pop_front();
+            ev = std::move(self->queue_.front());
+            self->queue_.pop_front();
           }
 
-          __self->__delivery_state_ = 0;
+          self->delivery_state_ = 0;
           try
           {
-            __self->__next_op_.reset(new __next_op_t(
-              stdexec::connect(exec::set_next(__self->__rcvr_, stdexec::just(std::move(__ev))),
-                               __next_receiver_t{__self})));
-            stdexec::start(*__self->__next_op_);
+            self->next_op_.reset(new next_op_t(
+              stdexec::connect(exec::set_next(self->rcvr_, stdexec::just(std::move(ev))),
+                               next_receiver_t{self})));
+            stdexec::start(*self->next_op_);
           }
           catch (...)
           {
-            __self->__error_          = std::current_exception();
-            __self->__delivery_state_ = 3;
-            __self->__delivery_done_.release();
+            self->error_          = std::current_exception();
+            self->delivery_state_ = 3;
+            self->delivery_done_.release();
           }
 
-          __self->__delivery_done_.acquire();
-          int const __state = __self->__delivery_state_;
-          __self->__next_op_.reset();
+          self->delivery_done_.acquire();
+          int const state = self->delivery_state_;
+          self->next_op_.reset();
 
-          if (__state == 2)
+          if (state == 2)
           {
-            __self->__schedule_cleanup(__finish_stopped);
+            self->schedule_cleanup(finish_stopped);
             return;
           }
-          if (__state == 3)
+          if (state == 3)
           {
-            __self->__schedule_cleanup(__finish_error);
+            self->schedule_cleanup(finish_error);
             return;
           }
         }
-        __self->__schedule_cleanup(__finish_stopped);
+        self->schedule_cleanup(finish_stopped);
       }
 
-      void __schedule_cleanup(__finish_kind __k) noexcept
+      void schedule_cleanup(finish_kind k) noexcept
       {
-        bool __expected = false;
-        if (!__cleanup_scheduled_.compare_exchange_strong(__expected,
+        bool expected = false;
+        if (!cleanup_scheduled_.compare_exchange_strong(expected,
                                                           true,
                                                           std::memory_order_acq_rel))
           return;
-        __finish_kind_ = __k;
-        SubmitThreadpoolWork(__cleanup_work_);
+        finish_kind_ = k;
+        SubmitThreadpoolWork(cleanup_work_);
       }
 
-      static void CALLBACK __cleanup_callback(PTP_CALLBACK_INSTANCE,
-                                              void* __ctx_ptr,
+      static void CALLBACK cleanup_callback(PTP_CALLBACK_INSTANCE,
+                                              void* ctx_ptr,
                                               PTP_WORK) noexcept
       {
-        static_cast<__op*>(__ctx_ptr)->__teardown_and_complete();
+        static_cast<op*>(ctx_ptr)->teardown_and_complete();
       }
 
-      void __teardown_and_complete() noexcept
+      void teardown_and_complete() noexcept
       {
-        __stop_cb_.reset();
+        stop_cb_.reset();
 
-        if (__hnotify_)
+        if (hnotify_)
         {
-          ::PowerUnregisterSuspendResumeNotification(__hnotify_);
-          __hnotify_ = nullptr;
+          ::PowerUnregisterSuspendResumeNotification(hnotify_);
+          hnotify_ = nullptr;
         }
 
-        if (__drainer_work_)
-          WaitForThreadpoolWorkCallbacks(__drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
+        if (drainer_work_)
+          WaitForThreadpoolWorkCallbacks(drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
 
-        __next_op_.reset();
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        next_op_.reset();
+        ctx_->active_.store(nullptr, std::memory_order_release);
 
-        auto                __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
-        auto                __ep         = std::move(__error_);
-        __finish_kind const __kind       = __finish_kind_;
+        auto                local_rcvr = static_cast<Rcvr&&>(rcvr_);
+        auto                ep         = std::move(error_);
+        finish_kind const kind       = finish_kind_;
 
-        if (__kind == __finish_error)
-          stdexec::set_error(std::move(__local_rcvr), std::move(__ep));
+        if (kind == finish_error)
+          stdexec::set_error(std::move(local_rcvr), std::move(ep));
         else
-          stdexec::set_stopped(std::move(__local_rcvr));
+          stdexec::set_stopped(std::move(local_rcvr));
       }
 
       void start() & noexcept
       {
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"power_context already has "
                                                                         "an active watch"}));
           return;
         }
 
-        __drainer_work_ = CreateThreadpoolWork(&__drainer_callback, this, &__env_);
-        if (!__drainer_work_)
+        drainer_work_ = CreateThreadpoolWork(&drainer_callback, this, &env_);
+        if (!drainer_work_)
         {
-          DWORD const __e = GetLastError();
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+          DWORD const e = GetLastError();
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(e),
                                                                        std::system_category(),
                                                                        "CreateThreadpoolWork "
                                                                        "(drainer)"}));
           return;
         }
 
-        __cleanup_work_ = CreateThreadpoolWork(&__cleanup_callback, this, &__env_);
-        if (!__cleanup_work_)
+        cleanup_work_ = CreateThreadpoolWork(&cleanup_callback, this, &env_);
+        if (!cleanup_work_)
         {
-          DWORD const __e = GetLastError();
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+          DWORD const e = GetLastError();
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(e),
                                                                        std::system_category(),
                                                                        "CreateThreadpoolWork "
                                                                        "(cleanup)"}));
           return;
         }
 
-        DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS __params{};
-        __params.Callback = &__power_callback;
-        __params.Context  = this;
-        if (DWORD const __cr = ::PowerRegisterSuspendResumeNotification(DEVICE_NOTIFY_CALLBACK,
-                                                                        &__params,
-                                                                        &__hnotify_);
-            __cr != ERROR_SUCCESS)
+        DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS params{};
+        params.Callback = &power_callback;
+        params.Context  = this;
+        if (DWORD const cr = ::PowerRegisterSuspendResumeNotification(DEVICE_NOTIFY_CALLBACK,
+                                                                        &params,
+                                                                        &hnotify_);
+            cr != ERROR_SUCCESS)
         {
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__cr),
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(cr),
                                                                        std::system_category(),
                                                                        "PowerRegisterSuspendResumeN"
                                                                        "otification"}));
           return;
         }
 
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
     };
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__delivery_state_ = 1;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 1;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__delivery_state_ = 2;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 2;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
-        __self_->__error_ = std::forward<_E>(__e);
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
+        self_->error_ = std::forward<E>(e);
       else
-        __self_->__error_ = std::make_exception_ptr(std::forward<_E>(__e));
-      __self_->__delivery_state_ = 3;
-      __self_->__delivery_done_.release();
+        self_->error_ = std::make_exception_ptr(std::forward<E>(e));
+      self_->delivery_state_ = 3;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -459,24 +459,24 @@ namespace powerx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<power_event>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<power_event>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      power_context* __ctx_;
-      watch_options  __opts_;
+      power_context* ctx_;
+      watch_options  opts_;
 
-      template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+      template <stdexec::receiver Rcvr>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<Rcvr>,
                                            exec::windows_thread_pool::scheduler>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
-  inline auto power_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto power_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, __opts};
+    return {this, opts};
   }
 }  // namespace powerx

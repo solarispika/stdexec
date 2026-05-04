@@ -102,15 +102,15 @@ namespace udx
 
   class udev_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base;
-    template <class _Rcvr>
-    struct __op;
-    template <class _Rcvr>
-    struct __next_receiver;
-    struct __watch_sender;
-  }  // namespace __detail
+    struct op_base;
+    template <class Rcvr>
+    struct op;
+    template <class Rcvr>
+    struct next_receiver;
+    struct watch_sender;
+  }  // namespace detail
 
   class udev_context
   {
@@ -121,183 +121,183 @@ namespace udx
     udev_context(udev_context const &)                    = delete;
     auto operator=(udev_context const &) -> udev_context& = delete;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    friend struct detail::watch_sender;
 
-    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::atomic<detail::op_base*> active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
     // RAII wrappers around libudev's reference-counted handles. Each
     // _ref/_unref API returns its argument so the ref-incrementing
     // accessors (e.g. udev_monitor_get_udev) can chain naturally if
     // ever needed; we always own a fresh ref here.
-    struct __udev_deleter
+    struct udev_deleter
     {
-      void operator()(::udev* __p) const noexcept
+      void operator()(::udev* p) const noexcept
       {
-        if (__p)
-          ::udev_unref(__p);
+        if (p)
+          ::udev_unref(p);
       }
     };
-    using __udev_ptr = std::unique_ptr<::udev, __udev_deleter>;
+    using udev_ptr = std::unique_ptr<::udev, udev_deleter>;
 
-    struct __monitor_deleter
+    struct monitor_deleter
     {
-      void operator()(::udev_monitor* __p) const noexcept
+      void operator()(::udev_monitor* p) const noexcept
       {
-        if (__p)
-          ::udev_monitor_unref(__p);
+        if (p)
+          ::udev_monitor_unref(p);
       }
     };
-    using __monitor_ptr = std::unique_ptr<::udev_monitor, __monitor_deleter>;
+    using monitor_ptr = std::unique_ptr<::udev_monitor, monitor_deleter>;
 
-    struct __device_deleter
+    struct device_deleter
     {
-      void operator()(::udev_device* __p) const noexcept
+      void operator()(::udev_device* p) const noexcept
       {
-        if (__p)
-          ::udev_device_unref(__p);
+        if (p)
+          ::udev_device_unref(p);
       }
     };
-    using __device_ptr = std::unique_ptr<::udev_device, __device_deleter>;
+    using device_ptr = std::unique_ptr<::udev_device, device_deleter>;
 
-    struct __enumerate_deleter
+    struct enumerate_deleter
     {
-      void operator()(::udev_enumerate* __p) const noexcept
+      void operator()(::udev_enumerate* p) const noexcept
       {
-        if (__p)
-          ::udev_enumerate_unref(__p);
+        if (p)
+          ::udev_enumerate_unref(p);
       }
     };
-    using __enumerate_ptr = std::unique_ptr<::udev_enumerate, __enumerate_deleter>;
+    using enumerate_ptr = std::unique_ptr<::udev_enumerate, enumerate_deleter>;
 
-    inline auto __action_to_kind(char const * __act) noexcept -> device_kind
+    inline auto action_to_kind(char const * act) noexcept -> device_kind
     {
-      if (!__act)
+      if (!act)
         return device_kind::unknown;
       // udev_device_get_action returns one of: "add", "remove", "change",
       // "online", "offline", "bind", "unbind", "move". Fixed-string
       // comparison; not localized.
-      if (std::strcmp(__act, "add") == 0)
+      if (std::strcmp(act, "add") == 0)
         return device_kind::add;
-      if (std::strcmp(__act, "remove") == 0)
+      if (std::strcmp(act, "remove") == 0)
         return device_kind::remove;
-      if (std::strcmp(__act, "change") == 0)
+      if (std::strcmp(act, "change") == 0)
         return device_kind::change;
-      if (std::strcmp(__act, "online") == 0)
+      if (std::strcmp(act, "online") == 0)
         return device_kind::online;
-      if (std::strcmp(__act, "offline") == 0)
+      if (std::strcmp(act, "offline") == 0)
         return device_kind::offline;
-      if (std::strcmp(__act, "bind") == 0)
+      if (std::strcmp(act, "bind") == 0)
         return device_kind::bind;
-      if (std::strcmp(__act, "unbind") == 0)
+      if (std::strcmp(act, "unbind") == 0)
         return device_kind::unbind;
-      if (std::strcmp(__act, "move") == 0)
+      if (std::strcmp(act, "move") == 0)
         return device_kind::move;
       return device_kind::unknown;
     }
 
-    inline auto __opt_string(char const * __s) -> std::optional<std::string>
+    inline auto opt_string(char const * s) -> std::optional<std::string>
     {
-      if (__s)
-        return std::string{__s};
+      if (s)
+        return std::string{s};
       return std::nullopt;
     }
 
-    inline auto __safe_string(char const * __s) -> std::string
+    inline auto safe_string(char const * s) -> std::string
     {
-      return __s ? std::string{__s} : std::string{};
+      return s ? std::string{s} : std::string{};
     }
 
-    inline auto __build_event(::udev_device*        __dev,
-                              device_kind           __synthesized_kind,
-                              bool                  __synthesized,
-                              watch_options const & __opts) -> device_event
+    inline auto build_event(::udev_device*        dev,
+                              device_kind           synthesized_kind,
+                              bool                  synthesized,
+                              watch_options const & opts) -> device_event
     {
-      device_event __ev;
-      __ev.kind      = __synthesized ? __synthesized_kind
-                                     : __action_to_kind(::udev_device_get_action(__dev));
-      __ev.subsystem = __safe_string(::udev_device_get_subsystem(__dev));
-      __ev.devtype   = __safe_string(::udev_device_get_devtype(__dev));
-      __ev.sysname   = __safe_string(::udev_device_get_sysname(__dev));
-      __ev.devnode   = __opt_string(::udev_device_get_devnode(__dev));
-      __ev.syspath   = __opt_string(::udev_device_get_syspath(__dev));
+      device_event ev;
+      ev.kind      = synthesized ? synthesized_kind
+                                     : action_to_kind(::udev_device_get_action(dev));
+      ev.subsystem = safe_string(::udev_device_get_subsystem(dev));
+      ev.devtype   = safe_string(::udev_device_get_devtype(dev));
+      ev.sysname   = safe_string(::udev_device_get_sysname(dev));
+      ev.devnode   = opt_string(::udev_device_get_devnode(dev));
+      ev.syspath   = opt_string(::udev_device_get_syspath(dev));
 
-      if (__opts.want_properties)
+      if (opts.want_properties)
       {
-        if (__opts.property_keys.empty())
+        if (opts.property_keys.empty())
         {
-          for (auto* __e = ::udev_device_get_properties_list_entry(__dev); __e != nullptr;
-               __e       = ::udev_list_entry_get_next(__e))
+          for (auto* e = ::udev_device_get_properties_list_entry(dev); e != nullptr;
+               e       = ::udev_list_entry_get_next(e))
           {
-            char const * __k = ::udev_list_entry_get_name(__e);
-            char const * __v = ::udev_list_entry_get_value(__e);
-            if (__k)
-              __ev.properties.emplace_back(__safe_string(__k), __safe_string(__v));
+            char const * k = ::udev_list_entry_get_name(e);
+            char const * v = ::udev_list_entry_get_value(e);
+            if (k)
+              ev.properties.emplace_back(safe_string(k), safe_string(v));
           }
         }
         else
         {
-          for (auto const & __key: __opts.property_keys)
+          for (auto const & key: opts.property_keys)
           {
-            char const * __v = ::udev_device_get_property_value(__dev, __key.c_str());
-            if (__v)
-              __ev.properties.emplace_back(__key, __v);
+            char const * v = ::udev_device_get_property_value(dev, key.c_str());
+            if (v)
+              ev.properties.emplace_back(key, v);
           }
         }
       }
-      return __ev;
+      return ev;
     }
 
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base()                                               = default;
-      virtual void __on_poll_complete(::io_uring_cqe const &) noexcept   = 0;
-      virtual void __on_cancel_complete(::io_uring_cqe const &) noexcept = 0;
-      virtual void __on_finalize_complete() noexcept                     = 0;
+      virtual ~op_base()                                               = default;
+      virtual void on_poll_complete(::io_uring_cqe const &) noexcept   = 0;
+      virtual void on_cancel_complete(::io_uring_cqe const &) noexcept = 0;
+      virtual void on_finalize_complete() noexcept                     = 0;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
     // Single-shot POLL_ADD on the udev_monitor netlink fd. The CQE's
     // res field carries the revents bitmask on success or a negative
     // errno on failure (-ECANCELED for explicit ASYNC_CANCEL, -EBADF
     // for fd close, etc.).
-    struct __poll_task
+    struct poll_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
-      int                                             __fd_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
+      int                                             fd_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -305,37 +305,37 @@ namespace udx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_POLL_ADD;
-        __sqe.fd     = __fd_;
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_POLL_ADD;
+        sqe.fd     = fd_;
         // poll32_events is the word-explicit member of the SQE union;
         // see linux/io_uring.h. POLLIN fits in 16 bits, so on
         // little-endian (x86_64, our only target) the byte layout is
         // identical to the legacy poll_events field.
-        __sqe.poll32_events = POLLIN | POLLERR | POLLHUP;
+        sqe.poll32_events = POLLIN | POLLERR | POLLHUP;
       }
 
-      void complete(::io_uring_cqe const & __cqe) noexcept
+      void complete(::io_uring_cqe const & cqe) noexcept
       {
-        __outer_->__on_poll_complete(__cqe);
+        outer_->on_poll_complete(cqe);
       }
     };
 
-    using __poll_op_t = experimental::execution::__io_uring::__io_task_facade<__poll_task>;
+    using poll_op_t = experimental::execution::__io_uring::__io_task_facade<poll_task>;
 
     // Cancel the in-flight POLL_ADD by user_data. Mirrors the inotify
-    // wrapper's __cancel_task; the only difference is the target type.
-    struct __cancel_task
+    // wrapper's cancel_task; the only difference is the target type.
+    struct cancel_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
-      void*                                           __target_user_data_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
+      void*                                           target_user_data_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -343,32 +343,32 @@ namespace udx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_ASYNC_CANCEL;
-        __sqe.addr   = reinterpret_cast<std::uint64_t>(__target_user_data_);
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_ASYNC_CANCEL;
+        sqe.addr   = reinterpret_cast<std::uint64_t>(target_user_data_);
       }
 
-      void complete(::io_uring_cqe const & __cqe) noexcept
+      void complete(::io_uring_cqe const & cqe) noexcept
       {
-        __outer_->__on_cancel_complete(__cqe);
+        outer_->on_cancel_complete(cqe);
       }
     };
 
-    using __cancel_op_t = experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
+    using cancel_op_t = experimental::execution::__io_uring::__io_task_facade<cancel_task>;
 
-    // Deferred-finalize trampoline: same shape as inotify's __finalize_task.
+    // Deferred-finalize trampoline: same shape as inotify's finalize_task.
     // See its comment for why the indirection through a NOP CQE is the
     // unique safe site for tearing down the op.
-    struct __finalize_task
+    struct finalize_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -376,111 +376,111 @@ namespace udx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_NOP;
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_NOP;
       }
 
       void complete(::io_uring_cqe const &) noexcept
       {
-        __outer_->__on_finalize_complete();
+        outer_->on_finalize_complete();
       }
     };
 
-    using __finalize_op_t = experimental::execution::__io_uring::__io_task_facade<__finalize_task>;
+    using finalize_op_t = experimental::execution::__io_uring::__io_task_facade<finalize_task>;
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<device_event>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<device_event>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      enum class __finish_kind
+      enum class finish_kind
       {
-        __none,
-        __stopped,
-        __error
+        none,
+        stopped,
+        error
       };
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept
         {
-          __self_->__stop_requested_.store(true, std::memory_order_release);
+          self_->stop_requested_.store(true, std::memory_order_release);
 
-          if (__self_->__cancel_op_.has_value())
+          if (self_->cancel_op_.has_value())
           {
             return;
           }
 
-          // Same off-thread shadow-pointer dance as inotify: __on_stop_fn
+          // Same off-thread shadow-pointer dance as inotify: on_stop_fn
           // can fire from any thread, but only the reactor mutates
-          // __poll_op_. Read the in-flight POLL's user_data atomically
+          // poll_op_. Read the in-flight POLL's user_data atomically
           // and submit a cancel for it.
-          auto* __tgt = __self_->__poll_user_data_.load(std::memory_order_acquire);
-          if (__tgt == nullptr)
+          auto* tgt = self_->poll_user_data_.load(std::memory_order_acquire);
+          if (tgt == nullptr)
           {
             return;
           }
-          __self_->__pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-          __self_->__cancel_op_.emplace(std::in_place,
-                                        __cancel_task{static_cast<__op_base*>(__self_),
-                                                      __self_->__ring_,
-                                                      __tgt});
-          __self_->__cancel_op_->start();
+          self_->pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+          self_->cancel_op_.emplace(std::in_place,
+                                        cancel_task{static_cast<op_base*>(self_),
+                                                      self_->ring_,
+                                                      tgt});
+          self_->cancel_op_->start();
         }
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      udev_context*                                   __ctx_;
-      watch_options                                   __opts_;
-      _Rcvr                                           __rcvr_;
-      experimental::execution::__io_uring::__context* __ring_;
-      __udev_ptr                                      __udev_;
-      __monitor_ptr                                   __monitor_;
-      int                                             __mon_fd_{-1};
+      udev_context*                                   ctx_;
+      watch_options                                   opts_;
+      Rcvr                                           rcvr_;
+      experimental::execution::__io_uring::__context* ring_;
+      udev_ptr                                      udev_;
+      monitor_ptr                                   monitor_;
+      int                                             mon_fd_{-1};
 
       // Single deque feeds both initial-enumerate-synthesized events and
       // events drained from POLL_ADD CQEs. The drainer pops one and
       // delivers via set_next; on set_value, drains again or arms POLL.
-      std::deque<device_event> __pending_;
+      std::deque<device_event> pending_;
 
-      std::optional<__poll_op_t>       __poll_op_;
-      std::optional<__cancel_op_t>     __cancel_op_;
-      std::optional<__finalize_op_t>   __finalize_op_;
-      std::unique_ptr<__next_op_t>     __next_op_;
-      std::optional<__stop_callback_t> __stop_cb_;
-      std::atomic<bool>                __stop_requested_{false};
-      std::atomic<bool>                __finalize_scheduled_{false};
-      // Shadow of in-flight POLL facade's __task*. Published (release)
-      // by __arm_poll after emplace, read (acquire) by __on_stop_fn
+      std::optional<poll_op_t>       poll_op_;
+      std::optional<cancel_op_t>     cancel_op_;
+      std::optional<finalize_op_t>   finalize_op_;
+      std::unique_ptr<next_op_t>     next_op_;
+      std::optional<stop_callback_t> stop_cb_;
+      std::atomic<bool>                stop_requested_{false};
+      std::atomic<bool>                finalize_scheduled_{false};
+      // Shadow of in-flight POLL facade's task*. Published (release)
+      // by arm_poll after emplace, read (acquire) by on_stop_fn
       // off-thread.
-      std::atomic<experimental::execution::__io_uring::__task*> __poll_user_data_{nullptr};
-      std::atomic<int>                                          __pending_cqes_{0};
-      __finish_kind      __finish_kind_{__finish_kind::__none};
-      std::exception_ptr __error_;
+      std::atomic<experimental::execution::__io_uring::__task*> poll_user_data_{nullptr};
+      std::atomic<int>                                          pending_cqes_{0};
+      finish_kind      finish_kind_{finish_kind::none};
+      std::exception_ptr error_;
 
-      explicit __op(udev_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{std::move(__o)}
-        , __rcvr_{std::move(__r)}
+      explicit op(udev_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{std::move(o)}
+        , rcvr_{std::move(r)}
       {
-        auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
-        __ring_      = __sched.__context_;
+        auto sched = stdexec::get_scheduler(stdexec::get_env(rcvr_));
+        ring_      = sched.__context_;
       }
 
       void start() & noexcept
       {
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"udev_context already "
                                                                         "has an active watch"}));
           return;
@@ -488,200 +488,200 @@ namespace udx
 
         try
         {
-          __setup_udev();
-          __seed_initial_replay();
+          setup_udev();
+          seed_initial_replay();
         }
         catch (...)
         {
           // Setup failure: undo the CAS, complete with error before any
           // CQE has been submitted.
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), std::current_exception());
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_), std::current_exception());
           return;
         }
 
-        __drain_or_poll();
+        drain_or_poll();
 
         // Stop callback last (matches inotify / fsevents / rdc / dax /
         // velx): if the token is already in stop state it fires
         // synchronously, which is now safe because we're either past
         // a set_next that's already in flight, or armed on POLL.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
 
-      void __setup_udev()
+      void setup_udev()
       {
-        __udev_.reset(::udev_new());
-        if (!__udev_)
+        udev_.reset(::udev_new());
+        if (!udev_)
         {
           throw std::runtime_error{"udev_new failed"};
         }
-        __monitor_.reset(::udev_monitor_new_from_netlink(__udev_.get(), "udev"));
-        if (!__monitor_)
+        monitor_.reset(::udev_monitor_new_from_netlink(udev_.get(), "udev"));
+        if (!monitor_)
         {
           throw std::runtime_error{"udev_monitor_new_from_netlink failed"};
         }
-        char const * __devtype = __opts_.devtype ? __opts_.devtype->c_str() : nullptr;
-        int          __rc      = ::udev_monitor_filter_add_match_subsystem_devtype(__monitor_.get(),
-                                                                     __opts_.subsystem.c_str(),
-                                                                     __devtype);
-        if (__rc < 0)
+        char const * devtype = opts_.devtype ? opts_.devtype->c_str() : nullptr;
+        int          rc      = ::udev_monitor_filter_add_match_subsystem_devtype(monitor_.get(),
+                                                                     opts_.subsystem.c_str(),
+                                                                     devtype);
+        if (rc < 0)
         {
-          throw std::system_error{-__rc,
+          throw std::system_error{-rc,
                                   std::system_category(),
                                   "udev_monitor_filter_add_match_subsystem_devtype"};
         }
-        __rc = ::udev_monitor_enable_receiving(__monitor_.get());
-        if (__rc < 0)
+        rc = ::udev_monitor_enable_receiving(monitor_.get());
+        if (rc < 0)
         {
-          throw std::system_error{-__rc, std::system_category(), "udev_monitor_enable_receiving"};
+          throw std::system_error{-rc, std::system_category(), "udev_monitor_enable_receiving"};
         }
-        __mon_fd_ = ::udev_monitor_get_fd(__monitor_.get());
-        if (__mon_fd_ < 0)
+        mon_fd_ = ::udev_monitor_get_fd(monitor_.get());
+        if (mon_fd_ < 0)
         {
           throw std::runtime_error{"udev_monitor_get_fd returned invalid fd"};
         }
       }
 
-      void __seed_initial_replay()
+      void seed_initial_replay()
       {
-        if (!__opts_.initial_replay)
+        if (!opts_.initial_replay)
         {
           return;
         }
-        __enumerate_ptr __enum{::udev_enumerate_new(__udev_.get())};
-        if (!__enum)
+        enumerate_ptr enumeration{::udev_enumerate_new(udev_.get())};
+        if (!enumeration)
         {
           throw std::runtime_error{"udev_enumerate_new failed"};
         }
-        int __rc = ::udev_enumerate_add_match_subsystem(__enum.get(), __opts_.subsystem.c_str());
-        if (__rc < 0)
+        int rc = ::udev_enumerate_add_match_subsystem(enumeration.get(), opts_.subsystem.c_str());
+        if (rc < 0)
         {
-          throw std::system_error{-__rc,
+          throw std::system_error{-rc,
                                   std::system_category(),
                                   "udev_enumerate_add_match_subsystem"};
         }
-        __rc = ::udev_enumerate_scan_devices(__enum.get());
-        if (__rc < 0)
+        rc = ::udev_enumerate_scan_devices(enumeration.get());
+        if (rc < 0)
         {
-          throw std::system_error{-__rc, std::system_category(), "udev_enumerate_scan_devices"};
+          throw std::system_error{-rc, std::system_category(), "udev_enumerate_scan_devices"};
         }
-        for (auto* __e = ::udev_enumerate_get_list_entry(__enum.get()); __e != nullptr;
-             __e       = ::udev_list_entry_get_next(__e))
+        for (auto* e = ::udev_enumerate_get_list_entry(enumeration.get()); e != nullptr;
+             e       = ::udev_list_entry_get_next(e))
         {
-          char const * __syspath = ::udev_list_entry_get_name(__e);
-          if (!__syspath)
+          char const * syspath = ::udev_list_entry_get_name(e);
+          if (!syspath)
             continue;
-          __device_ptr __dev{::udev_device_new_from_syspath(__udev_.get(), __syspath)};
-          if (!__dev)
+          device_ptr dev{::udev_device_new_from_syspath(udev_.get(), syspath)};
+          if (!dev)
             continue;
           // devtype filter (libudev's enumerate_add_match_subsystem
           // does not also filter on devtype). Skip non-matching devices
           // explicitly so initial replay agrees with the live filter.
-          if (__opts_.devtype)
+          if (opts_.devtype)
           {
-            char const * __dt = ::udev_device_get_devtype(__dev.get());
-            if (!__dt || *__opts_.devtype != __dt)
+            char const * dt = ::udev_device_get_devtype(dev.get());
+            if (!dt || *opts_.devtype != dt)
               continue;
           }
-          __pending_.push_back(__build_event(__dev.get(),
+          pending_.push_back(build_event(dev.get(),
                                              device_kind::add,
                                              /*synthesized=*/true,
-                                             __opts_));
+                                             opts_));
         }
       }
 
       // The drainer state machine: pending non-empty → deliver one
       // and let next_receiver::set_value re-invoke us; pending empty →
       // arm POLL_ADD and let the CQE handler push more then re-invoke.
-      void __drain_or_poll() noexcept
+      void drain_or_poll() noexcept
       {
-        if (__stop_requested_.load(std::memory_order_acquire))
+        if (stop_requested_.load(std::memory_order_acquire))
         {
-          __request_finalize(__finish_kind::__stopped);
+          request_finalize(finish_kind::stopped);
           return;
         }
-        if (__pending_.empty())
+        if (pending_.empty())
         {
-          __arm_poll();
+          arm_poll();
           return;
         }
-        __deliver_front();
+        deliver_front();
       }
 
-      void __deliver_front() noexcept
+      void deliver_front() noexcept
       {
-        device_event __ev = std::move(__pending_.front());
-        __pending_.pop_front();
+        device_event ev = std::move(pending_.front());
+        pending_.pop_front();
         try
         {
-          __next_op_.reset(new __next_op_t(
-            stdexec::connect(exec::set_next(__rcvr_, stdexec::just(std::move(__ev))),
-                             __next_receiver_t{this})));
-          stdexec::start(*__next_op_);
+          next_op_.reset(new next_op_t(
+            stdexec::connect(exec::set_next(rcvr_, stdexec::just(std::move(ev))),
+                             next_receiver_t{this})));
+          stdexec::start(*next_op_);
         }
         catch (...)
         {
-          __error_ = std::current_exception();
-          __request_finalize(__finish_kind::__error);
+          error_ = std::current_exception();
+          request_finalize(finish_kind::error);
         }
       }
 
-      void __arm_poll() noexcept
+      void arm_poll() noexcept
       {
-        __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-        __poll_op_.emplace(std::in_place,
-                           __poll_task{static_cast<__op_base*>(this), __ring_, __mon_fd_});
-        auto* __tgt = static_cast<experimental::execution::__io_uring::__task*>(&*__poll_op_);
-        __poll_user_data_.store(__tgt, std::memory_order_release);
-        __poll_op_->start();
+        pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+        poll_op_.emplace(std::in_place,
+                           poll_task{static_cast<op_base*>(this), ring_, mon_fd_});
+        auto* tgt = static_cast<experimental::execution::__io_uring::__task*>(&*poll_op_);
+        poll_user_data_.store(tgt, std::memory_order_release);
+        poll_op_->start();
       }
 
-      void __request_finalize(__finish_kind __k) noexcept
+      void request_finalize(finish_kind k) noexcept
       {
-        bool __expected = false;
-        if (!__finalize_scheduled_.compare_exchange_strong(__expected,
+        bool expected = false;
+        if (!finalize_scheduled_.compare_exchange_strong(expected,
                                                            true,
                                                            std::memory_order_acq_rel))
         {
           return;
         }
-        __finish_kind_ = __k;
-        __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-        __finalize_op_.emplace(std::in_place,
-                               __finalize_task{static_cast<__op_base*>(this), __ring_});
-        __finalize_op_->start();
+        finish_kind_ = k;
+        pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+        finalize_op_.emplace(std::in_place,
+                               finalize_task{static_cast<op_base*>(this), ring_});
+        finalize_op_->start();
       }
 
-      void __on_poll_complete(::io_uring_cqe const & __cqe) noexcept override
+      void on_poll_complete(::io_uring_cqe const & cqe) noexcept override
       {
-        __poll_user_data_.store(nullptr, std::memory_order_release);
+        poll_user_data_.store(nullptr, std::memory_order_release);
 
-        if (__cqe.res < 0)
+        if (cqe.res < 0)
         {
-          if (__cqe.res == -ECANCELED || __stop_requested_.load(std::memory_order_acquire))
+          if (cqe.res == -ECANCELED || stop_requested_.load(std::memory_order_acquire))
           {
-            __request_finalize(__finish_kind::__stopped);
+            request_finalize(finish_kind::stopped);
           }
           else
           {
-            __error_ = std::make_exception_ptr(
-              std::system_error{-__cqe.res, std::system_category(), "udev_monitor poll"});
-            __request_finalize(__finish_kind::__error);
+            error_ = std::make_exception_ptr(
+              std::system_error{-cqe.res, std::system_category(), "udev_monitor poll"});
+            request_finalize(finish_kind::error);
           }
-          __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+          pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
           return;
         }
 
         // POLLERR / POLLHUP arrive in cqe.res as event-mask bits when
         // POLL_ADD fires. Treat these as fatal — the netlink socket
         // is gone or in error state, no point continuing.
-        if ((__cqe.res & (POLLERR | POLLHUP)) && !(__cqe.res & POLLIN))
+        if ((cqe.res & (POLLERR | POLLHUP)) && !(cqe.res & POLLIN))
         {
-          __error_ = std::make_exception_ptr(std::runtime_error{"udev_monitor netlink socket "
+          error_ = std::make_exception_ptr(std::runtime_error{"udev_monitor netlink socket "
                                                                 "POLLERR/POLLHUP"});
-          __request_finalize(__finish_kind::__error);
-          __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+          request_finalize(finish_kind::error);
+          pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
           return;
         }
 
@@ -692,119 +692,119 @@ namespace udx
         {
           while (true)
           {
-            __device_ptr __dev{::udev_monitor_receive_device(__monitor_.get())};
-            if (!__dev)
+            device_ptr dev{::udev_monitor_receive_device(monitor_.get())};
+            if (!dev)
               break;
-            __pending_.push_back(__build_event(__dev.get(),
+            pending_.push_back(build_event(dev.get(),
                                                device_kind::unknown,
                                                /*synthesized=*/false,
-                                               __opts_));
+                                               opts_));
           }
         }
         catch (...)
         {
-          __error_ = std::current_exception();
-          __request_finalize(__finish_kind::__error);
-          __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+          error_ = std::current_exception();
+          request_finalize(finish_kind::error);
+          pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
           return;
         }
 
-        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
-        __drain_or_poll();
+        pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+        drain_or_poll();
       }
 
-      void __on_cancel_complete(::io_uring_cqe const &) noexcept override
+      void on_cancel_complete(::io_uring_cqe const &) noexcept override
       {
-        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+        pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
       }
 
-      void __on_finalize_complete() noexcept override
+      void on_finalize_complete() noexcept override
       {
-        if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        if (pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
-          __finalize_and_complete();
+          finalize_and_complete();
         }
       }
 
-      void __on_next_value() noexcept
+      void on_next_value() noexcept
       {
-        if (__stop_requested_.load(std::memory_order_acquire))
+        if (stop_requested_.load(std::memory_order_acquire))
         {
-          __request_finalize(__finish_kind::__stopped);
+          request_finalize(finish_kind::stopped);
           return;
         }
-        __drain_or_poll();
+        drain_or_poll();
       }
 
-      void __on_next_stopped() noexcept
+      void on_next_stopped() noexcept
       {
-        __request_finalize(__finish_kind::__stopped);
+        request_finalize(finish_kind::stopped);
       }
 
-      void __on_next_error(std::exception_ptr __ep) noexcept
+      void on_next_error(std::exception_ptr ep) noexcept
       {
-        __error_ = std::move(__ep);
-        __request_finalize(__finish_kind::__error);
+        error_ = std::move(ep);
+        request_finalize(finish_kind::error);
       }
 
-      void __finalize_and_complete() noexcept
+      void finalize_and_complete() noexcept
       {
-        __stop_cb_.reset();
-        __next_op_.reset();
-        __cancel_op_.reset();
-        __poll_op_.reset();
-        __finalize_op_.reset();
+        stop_cb_.reset();
+        next_op_.reset();
+        cancel_op_.reset();
+        poll_op_.reset();
+        finalize_op_.reset();
         // monitor_unref closes the netlink fd; udev_unref drops the
         // udev*. Order does not matter (each holds its own refcount).
-        __monitor_.reset();
-        __udev_.reset();
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        monitor_.reset();
+        udev_.reset();
+        ctx_->active_.store(nullptr, std::memory_order_release);
 
-        if (__finish_kind_ == __finish_kind::__error)
+        if (finish_kind_ == finish_kind::error)
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), std::move(__error_));
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_), std::move(error_));
         }
         else
         {
-          stdexec::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
+          stdexec::set_stopped(static_cast<Rcvr&&>(rcvr_));
         }
       }
     };
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__on_next_value();
+      self_->on_next_value();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__on_next_stopped();
+      self_->on_next_stopped();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
       {
-        __self_->__on_next_error(std::forward<_E>(__e));
+        self_->on_next_error(std::forward<E>(e));
       }
       else
       {
-        __self_->__on_next_error(std::make_exception_ptr(std::forward<_E>(__e)));
+        self_->on_next_error(std::make_exception_ptr(std::forward<E>(e)));
       }
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -812,23 +812,23 @@ namespace udx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<device_event>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<device_event>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      udev_context* __ctx_;
-      watch_options __opts_;
+      udev_context* ctx_;
+      watch_options opts_;
 
-      template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::io_uring_scheduler>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      template <stdexec::receiver Rcvr>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<Rcvr>, exec::io_uring_scheduler>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
-  inline auto udev_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto udev_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, std::move(__opts)};
+    return {this, std::move(opts)};
   }
 }  // namespace udx

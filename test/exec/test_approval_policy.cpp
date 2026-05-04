@@ -39,57 +39,57 @@ namespace
 
   TEST_CASE("approval::resolve_verdict returns the no-policy default on monostate")
   {
-    approval::policy<fake_info> __p{};  // default-constructed = monostate
+    approval::policy<fake_info> p{};  // default-constructed = monostate
 
-    bool __factory_called = false;
-    auto __make_info      = [&]
+    bool factory_called = false;
+    auto make_info      = [&]
     {
-      __factory_called = true;
+      factory_called = true;
       return fake_info{"unused"};
     };
 
-    CHECK(approval::resolve_verdict(__p, __make_info, /*default=*/true) == true);
-    CHECK(approval::resolve_verdict(__p, __make_info, /*default=*/false) == false);
+    CHECK(approval::resolve_verdict(p, make_info, /*default=*/true) == true);
+    CHECK(approval::resolve_verdict(p, make_info, /*default=*/false) == false);
     // monostate must short-circuit before the factory runs — building the
     // info from an OS handle is not free.
-    CHECK_FALSE(__factory_called);
+    CHECK_FALSE(factory_called);
   }
 
   TEST_CASE("approval::resolve_verdict invokes a sync predicate and returns its bool")
   {
     SECTION("sync allow")
     {
-      approval::policy<fake_info> __p = approval::sync<fake_info>{
+      approval::policy<fake_info> p = approval::sync<fake_info>{
         .predicate = [](fake_info const &) { return true; },
       };
-      CHECK(approval::resolve_verdict(__p, [] { return fake_info{"x"}; }) == true);
+      CHECK(approval::resolve_verdict(p, [] { return fake_info{"x"}; }) == true);
     }
     SECTION("sync deny")
     {
-      approval::policy<fake_info> __p = approval::sync<fake_info>{
+      approval::policy<fake_info> p = approval::sync<fake_info>{
         .predicate = [](fake_info const &) { return false; },
       };
-      CHECK(approval::resolve_verdict(__p, [] { return fake_info{"x"}; }) == false);
+      CHECK(approval::resolve_verdict(p, [] { return fake_info{"x"}; }) == false);
     }
     SECTION("predicate sees the info produced by the factory")
     {
-      std::string                 __seen;
-      approval::policy<fake_info> __p = approval::sync<fake_info>{
+      std::string                 seen;
+      approval::policy<fake_info> p = approval::sync<fake_info>{
         .predicate =
-          [&__seen](fake_info const &__i)
+          [&seen](fake_info const &i)
         {
-          __seen = __i.name;
+          seen = i.name;
           return true;
         },
       };
-      approval::resolve_verdict(__p, [] { return fake_info{"hello"}; });
-      CHECK(__seen == "hello");
+      approval::resolve_verdict(p, [] { return fake_info{"hello"}; });
+      CHECK(seen == "hello");
     }
   }
 
   TEST_CASE("approval::resolve_verdict bounded happy path returns predicate's bool")
   {
-    approval::policy<fake_info> __p = approval::bounded<fake_info>{
+    approval::policy<fake_info> p = approval::bounded<fake_info>{
       .predicate =
         [](fake_info const &, stdexec::inplace_stop_token)
       {
@@ -100,24 +100,24 @@ namespace
       .on_timeout_allow = true,
     };
 
-    CHECK(approval::resolve_verdict(__p, [] { return fake_info{"x"}; }) == false);
+    CHECK(approval::resolve_verdict(p, [] { return fake_info{"x"}; }) == false);
   }
 
   TEST_CASE("approval::resolve_verdict bounded timeout uses on_timeout_allow and signals stop")
   {
-    std::atomic<bool> __saw_stop{false};
+    std::atomic<bool> saw_stop{false};
 
-    approval::policy<fake_info> __p = approval::bounded<fake_info>{
+    approval::policy<fake_info> p = approval::bounded<fake_info>{
       .predicate =
-        [&__saw_stop](fake_info const &, stdexec::inplace_stop_token __tok)
+        [&saw_stop](fake_info const &, stdexec::inplace_stop_token tok)
       {
         // Spin until either stop is requested (the wrapper's escape hatch
         // after timeout) or a generous safety cap.
-        for (int __i = 0; __i < 200; ++__i)
+        for (int i = 0; i < 200; ++i)
         {
-          if (__tok.stop_requested())
+          if (tok.stop_requested())
           {
-            __saw_stop.store(true, std::memory_order_release);
+            saw_stop.store(true, std::memory_order_release);
             return true;  // value never observed by caller — past timeout
           }
           std::this_thread::sleep_for(10ms);
@@ -128,11 +128,11 @@ namespace
       .on_timeout_allow = false,  // intentionally distinct from predicate's return
     };
 
-    CHECK(approval::resolve_verdict(__p, [] { return fake_info{"x"}; }) == false);
+    CHECK(approval::resolve_verdict(p, [] { return fake_info{"x"}; }) == false);
 
     // Give the detached worker a moment to observe the stop request.
-    for (int __i = 0; __i < 100 && !__saw_stop.load(std::memory_order_acquire); ++__i)
+    for (int i = 0; i < 100 && !saw_stop.load(std::memory_order_acquire); ++i)
       std::this_thread::sleep_for(10ms);
-    CHECK(__saw_stop.load(std::memory_order_acquire));
+    CHECK(saw_stop.load(std::memory_order_acquire));
   }
 }  // namespace

@@ -39,30 +39,30 @@ using namespace std::chrono_literals;
 
 namespace
 {
-  auto run_capture(std::string const & __cmd) -> std::string
+  auto run_capture(std::string const & cmd) -> std::string
   {
-    std::string __out;
-    FILE*       __p = ::popen(__cmd.c_str(), "r");
-    if (!__p)
+    std::string out;
+    FILE*       p = ::popen(cmd.c_str(), "r");
+    if (!p)
       return {};
-    char __buf[1024];
-    while (std::fgets(__buf, sizeof __buf, __p))
-      __out += __buf;
-    ::pclose(__p);
-    return __out;
+    char buf[1024];
+    while (std::fgets(buf, sizeof buf, p))
+      out += buf;
+    ::pclose(p);
+    return out;
   }
 
-  auto first_token(std::string const & __s) -> std::string
+  auto first_token(std::string const & s) -> std::string
   {
-    std::istringstream __ss{__s};
-    std::string        __tok;
-    __ss >> __tok;
-    return __tok;
+    std::istringstream ss{s};
+    std::string        tok;
+    ss >> tok;
+    return tok;
   }
 
-  auto kind_label(dax::disk_event_kind __k) -> char const *
+  auto kind_label(dax::disk_event_kind k) -> char const *
   {
-    switch (__k)
+    switch (k)
     {
     case dax::disk_event_kind::appeared:
       return "appeared";
@@ -77,69 +77,69 @@ namespace
 
 auto main() -> int
 {
-  auto const      __image = fs::temp_directory_path() / "dax_demo.sparseimage";
-  std::error_code __ec;
-  fs::remove(__image, __ec);
+  auto const      image = fs::temp_directory_path() / "dax_demo.sparseimage";
+  std::error_code ec;
+  fs::remove(image, ec);
 
-  std::string __create = "hdiutil create -size 1m -fs HFS+ -volname dax_demo -quiet "
-                       + __image.string();
-  if (std::system(__create.c_str()) != 0)
+  std::string create = "hdiutil create -size 1m -fs HFS+ -volname dax_demo -quiet "
+                       + image.string();
+  if (std::system(create.c_str()) != 0)
   {
     std::fprintf(stderr, "hdiutil create failed\n");
     return 1;
   }
-  std::printf("created %s\n", __image.c_str());
+  std::printf("created %s\n", image.c_str());
 
-  dax::da_context __ctx;
+  dax::da_context ctx;
 
-  std::thread __mutator{[&]
+  std::thread mutator{[&]
                         {
                           std::this_thread::sleep_for(500ms);
 
-                          auto __out = run_capture("hdiutil attach -nomount " + __image.string());
-                          auto __dev = first_token(__out);
-                          if (__dev.empty())
+                          auto out = run_capture("hdiutil attach -nomount " + image.string());
+                          auto dev = first_token(out);
+                          if (dev.empty())
                           {
                             std::fprintf(stderr, "hdiutil attach produced no /dev/diskN\n");
                             return;
                           }
-                          std::printf("attached %s\n", __dev.c_str());
+                          std::printf("attached %s\n", dev.c_str());
 
                           std::this_thread::sleep_for(800ms);
 
-                          std::system(("hdiutil detach -quiet " + __dev).c_str());
-                          std::printf("detached %s\n", __dev.c_str());
+                          std::system(("hdiutil detach -quiet " + dev).c_str());
+                          std::printf("detached %s\n", dev.c_str());
                         }};
 
-  exec::static_thread_pool __pool{1};
-  auto                     __timer_sched = __pool.get_scheduler();
-  exec::libdispatch_queue  __dax_pool    = exec::libdispatch_queue::make_concurrent("dax.demo");
+  exec::static_thread_pool pool{1};
+  auto                     timer_sched = pool.get_scheduler();
+  exec::libdispatch_queue  dax_pool    = exec::libdispatch_queue::make_concurrent("dax.demo");
 
   // Run the watch until the timer wins, demonstrating cancellation through the
   // sequence-sender pipeline.
   stdexec::sync_wait(
-    exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+    exec::when_any(stdexec::starts_on(timer_sched, stdexec::just())
                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                   exec::sequence_with_scheduler(__dax_pool.get_scheduler(),
-                                                 __ctx.watch({.watch_appeared            = true,
+                   exec::sequence_with_scheduler(dax_pool.get_scheduler(),
+                                                 ctx.watch({.watch_appeared            = true,
                                                               .watch_disappeared         = true,
                                                               .watch_description_changed = false}))
                      | exec::transform_each(stdexec::then(
-                       [&](dax::disk_event __e)
+                       [&](dax::disk_event e)
                        {
                          std::printf("[%s] bsd=%s",
-                                     kind_label(__e.kind),
-                                     __e.bsd_name.empty() ? "?" : __e.bsd_name.c_str());
-                         if (__e.volume_name)
-                           std::printf(" volume=\"%s\"", __e.volume_name->c_str());
-                         if (__e.volume_path)
-                           std::printf(" path=%s", __e.volume_path->c_str());
+                                     kind_label(e.kind),
+                                     e.bsd_name.empty() ? "?" : e.bsd_name.c_str());
+                         if (e.volume_name)
+                           std::printf(" volume=\"%s\"", e.volume_name->c_str());
+                         if (e.volume_path)
+                           std::printf(" path=%s", e.volume_path->c_str());
                          std::printf("\n");
                        }))
                      | exec::ignore_all_values()));
 
-  __mutator.join();
-  fs::remove(__image, __ec);
+  mutator.join();
+  fs::remove(image, ec);
 
   std::printf("done\n");
   return 0;

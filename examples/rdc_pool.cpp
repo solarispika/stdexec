@@ -37,9 +37,9 @@ using namespace std::chrono_literals;
 
 namespace
 {
-  auto action_name(DWORD __a) -> char const *
+  auto action_name(DWORD a) -> char const *
   {
-    switch (__a)
+    switch (a)
     {
     case FILE_ACTION_ADDED:
       return "ADDED";
@@ -59,55 +59,55 @@ namespace
 
 auto main() -> int
 {
-  auto __dir = fs::temp_directory_path() / "rdcx_pool_demo";
-  fs::create_directories(__dir);
-  for (auto const & __e: fs::directory_iterator{__dir})
+  auto dir = fs::temp_directory_path() / "rdcx_pool_demo";
+  fs::create_directories(dir);
+  for (auto const & e: fs::directory_iterator{dir})
   {
-    fs::remove_all(__e.path());
+    fs::remove_all(e.path());
   }
-  __dir = fs::canonical(__dir);
-  std::wprintf(L"watching %ls (pool variant)\n", __dir.c_str());
+  dir = fs::canonical(dir);
+  std::wprintf(L"watching %ls (pool variant)\n", dir.c_str());
 
-  rdcx::pool::rdc_context __ctx{__dir.wstring()};
+  rdcx::pool::rdc_context ctx{dir.wstring()};
 
-  std::atomic<bool> __mutator_stop{false};
-  std::thread       __mutator{[&]
+  std::atomic<bool> mutator_stop{false};
+  std::thread       mutator{[&]
                         {
-                          for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+                          for (int i = 0; !mutator_stop.load() && i < 5; ++i)
                           {
                             std::this_thread::sleep_for(400ms);
-                            std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
-                            __f << "hello " << __i << "\n";
+                            std::ofstream f{dir / ("file_" + std::to_string(i) + ".txt")};
+                            f << "hello " << i << "\n";
                           }
                         }};
 
-  exec::windows_thread_pool __wtp{2, 4};
+  exec::windows_thread_pool wtp{2, 4};
 
-  exec::static_thread_pool __timer_pool{1};
-  auto                     __timer_sched = __timer_pool.get_scheduler();
+  exec::static_thread_pool timer_pool{1};
+  auto                     timer_sched = timer_pool.get_scheduler();
   stdexec::sync_wait(
-    exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+    exec::when_any(stdexec::starts_on(timer_sched, stdexec::just())
                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                   exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch())
+                   exec::sequence_with_scheduler(wtp.get_scheduler(), ctx.watch())
                      | exec::transform_each(stdexec::then(
-                       [&](rdcx::pool::fs_batch __b)
+                       [&](rdcx::pool::fs_batch b)
                        {
-                         if (__b.overflow)
+                         if (b.overflow)
                          {
                            std::printf("[overflow] kernel buffer outpaced user "
                                        "buffer; rescan required\n");
                            return;
                          }
-                         for (auto const & __e: __b.events)
+                         for (auto const & e: b.events)
                          {
                            std::wprintf(L"action=%hs path=%ls\n",
-                                        action_name(__e.action),
-                                        __e.path.c_str());
+                                        action_name(e.action),
+                                        e.path.c_str());
                          }
                        }))
                      | exec::ignore_all_values()));
 
-  __mutator_stop.store(true);
-  __mutator.join();
+  mutator_stop.store(true);
+  mutator.join();
   return 0;
 }

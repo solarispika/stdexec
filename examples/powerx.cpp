@@ -46,9 +46,9 @@ using namespace std::chrono_literals;
 
 namespace
 {
-  auto kind_label(powerx::power_event_kind __k) -> char const *
+  auto kind_label(powerx::power_event_kind k) -> char const *
   {
-    switch (__k)
+    switch (k)
     {
     case powerx::power_event_kind::suspend:
       return "suspend";
@@ -64,27 +64,27 @@ auto main() -> int
   std::printf("powerx demo: watching system power events for 30s\n");
 #if defined(__APPLE__) && defined(__MACH__)
   std::printf("  trigger with: `pmset sleepnow` (from another shell)\n");
-  exec::libdispatch_queue __pool = exec::libdispatch_queue::make_concurrent("powerx.demo");
-  auto                    __pq   = __pool.get_scheduler();
+  exec::libdispatch_queue pool = exec::libdispatch_queue::make_concurrent("powerx.demo");
+  auto                    pq   = pool.get_scheduler();
 #elif defined(_WIN32)
   std::printf("  trigger with: Start menu → Sleep, or close the lid\n");
-  exec::windows_thread_pool __pool;
-  auto                      __pq = __pool.get_scheduler();
+  exec::windows_thread_pool pool;
+  auto                      pq = pool.get_scheduler();
 #endif
 
-  powerx::power_context __ctx;
+  powerx::power_context ctx;
 
-  exec::static_thread_pool __timer_pool{1};
-  auto                     __timer_sched = __timer_pool.get_scheduler();
+  exec::static_thread_pool timer_pool{1};
+  auto                     timer_sched = timer_pool.get_scheduler();
 
   // Race the watch against a 30s timer; whichever completes first cancels the
   // other via when_any's stop-token propagation.
   stdexec::sync_wait(exec::when_any(
-    stdexec::starts_on(__timer_sched, stdexec::just())
+    stdexec::starts_on(timer_sched, stdexec::just())
       | stdexec::then([&] { std::this_thread::sleep_for(30s); }),
-    exec::sequence_with_scheduler(__pq, __ctx.watch({.watch_suspend = true, .watch_resume = true}))
-      | exec::transform_each(stdexec::then([&](powerx::power_event __e)
-                                           { std::printf("[%s]\n", kind_label(__e.kind)); }))
+    exec::sequence_with_scheduler(pq, ctx.watch({.watch_suspend = true, .watch_resume = true}))
+      | exec::transform_each(stdexec::then([&](powerx::power_event e)
+                                           { std::printf("[%s]\n", kind_label(e.kind)); }))
       | exec::ignore_all_values()));
 
   std::printf("done\n");

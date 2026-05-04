@@ -74,22 +74,22 @@ namespace netx
 
   class net_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base()                                  = default;
+      virtual ~op_base()                                  = default;
       virtual void deliver(interface_change_event) noexcept = 0;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver;
+    template <class Rcvr>
+    struct next_receiver;
 
-    struct __watch_sender;
-  }  // namespace __detail
+    struct watch_sender;
+  }  // namespace detail
 
   class net_context
   {
@@ -100,323 +100,323 @@ namespace netx
     net_context(net_context const &)                    = delete;
     auto operator=(net_context const &) -> net_context& = delete;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    friend struct detail::watch_sender;
 
-    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::atomic<detail::op_base*> active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
     // Build the {IPv4, IPv6} CFArray of global-state pattern keys passed to
     // SCDynamicStoreSetNotificationKeys. Caller owns the returned CFArrayRef
     // and must CFRelease it (SCDynamicStoreSetNotificationKeys retains an
     // internal copy).
-    inline auto __make_pattern_array() -> CFArrayRef
+    inline auto make_pattern_array() -> CFArrayRef
     {
-      CFStringRef  __ipv4    = SCDynamicStoreKeyCreateNetworkGlobalEntity(nullptr,
+      CFStringRef  ipv4    = SCDynamicStoreKeyCreateNetworkGlobalEntity(nullptr,
                                                                       kSCDynamicStoreDomainState,
                                                                       kSCEntNetIPv4);
-      CFStringRef  __ipv6    = SCDynamicStoreKeyCreateNetworkGlobalEntity(nullptr,
+      CFStringRef  ipv6    = SCDynamicStoreKeyCreateNetworkGlobalEntity(nullptr,
                                                                       kSCDynamicStoreDomainState,
                                                                       kSCEntNetIPv6);
-      void const * __vals[2] = {__ipv4, __ipv6};
-      CFArrayRef   __arr     = CFArrayCreate(nullptr, __vals, 2, &kCFTypeArrayCallBacks);
-      if (__ipv4)
-        CFRelease(__ipv4);
-      if (__ipv6)
-        CFRelease(__ipv6);
-      return __arr;
+      void const * vals[2] = {ipv4, ipv6};
+      CFArrayRef   arr     = CFArrayCreate(nullptr, vals, 2, &kCFTypeArrayCallBacks);
+      if (ipv4)
+        CFRelease(ipv4);
+      if (ipv6)
+        CFRelease(ipv6);
+      return arr;
     }
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<interface_change_event>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<interface_change_event>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept;
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      net_context*      __ctx_;
-      watch_options     __opts_;
-      _Rcvr             __rcvr_;
-      dispatch_queue_t  __queue_{nullptr};
-      SCDynamicStoreRef __store_{nullptr};
+      net_context*      ctx_;
+      watch_options     opts_;
+      Rcvr             rcvr_;
+      dispatch_queue_t  queue_{nullptr};
+      SCDynamicStoreRef store_{nullptr};
 
-      std::atomic<bool>                __stop_requested_{false};
-      std::binary_semaphore            __delivery_done_{0};
-      int                              __delivery_state_{0};  // 1=value 2=stopped 3=error
-      std::exception_ptr               __error_;
-      std::optional<__stop_callback_t> __stop_cb_;
-      std::unique_ptr<__next_op_t>     __next_op_;
+      std::atomic<bool>                stop_requested_{false};
+      std::binary_semaphore            delivery_done_{0};
+      int                              delivery_state_{0};  // 1=value 2=stopped 3=error
+      std::exception_ptr               error_;
+      std::optional<stop_callback_t> stop_cb_;
+      std::unique_ptr<next_op_t>     next_op_;
 
-      static auto __make_internal_queue(_Rcvr const & __r) -> dispatch_queue_t
+      static auto make_internal_queue(Rcvr const & r) -> dispatch_queue_t
       {
-        auto __sch  = stdexec::get_scheduler(stdexec::get_env(__r));
-        auto __attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
+        auto sch  = stdexec::get_scheduler(stdexec::get_env(r));
+        auto attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
                                                               QOS_CLASS_UNSPECIFIED,
                                                               0);
-        return dispatch_queue_create_with_target("netx.session", __attr, __sch.native_handle());
+        return dispatch_queue_create_with_target("netx.session", attr, sch.native_handle());
       }
 
-      explicit __op(net_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{__o}
-        , __rcvr_{std::move(__r)}
-        , __queue_{__make_internal_queue(__rcvr_)}
+      explicit op(net_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{o}
+        , rcvr_{std::move(r)}
+        , queue_{make_internal_queue(rcvr_)}
       {}
 
-      ~__op() override
+      ~op() override
       {
-        if (__queue_)
-          dispatch_release(__queue_);
+        if (queue_)
+          dispatch_release(queue_);
       }
 
-      // SCDynamicStore C callback. Runs on __queue_ once
+      // SCDynamicStore C callback. Runs on queue_ once
       // SCDynamicStoreSetDispatchQueue has been called. We do not inspect
       // changedKeys (hint-only event semantics).
       static void
-      __on_change_cb(SCDynamicStoreRef /*store*/, CFArrayRef /*changedKeys*/, void* __ctx) noexcept
+      on_change_cb(SCDynamicStoreRef /*store*/, CFArrayRef /*changedKeys*/, void* ctx) noexcept
       {
-        static_cast<__op_base*>(__ctx)->deliver(interface_change_event{});
+        static_cast<op_base*>(ctx)->deliver(interface_change_event{});
       }
 
       void start() & noexcept
       {
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"net_context already has "
                                                                         "an active watch"}));
           return;
         }
 
-        SCDynamicStoreContext __sc_ctx{};
-        __sc_ctx.info = static_cast<__op_base*>(this);
-        __store_      = SCDynamicStoreCreate(nullptr, CFSTR("netx"), &__on_change_cb, &__sc_ctx);
-        if (!__store_)
+        SCDynamicStoreContext sc_ctx{};
+        sc_ctx.info = static_cast<op_base*>(this);
+        store_      = SCDynamicStoreCreate(nullptr, CFSTR("netx"), &on_change_cb, &sc_ctx);
+        if (!store_)
         {
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"SCDynamicStoreCreate "
                                                                         "failed"}));
           return;
         }
 
-        CFArrayRef __pats = __make_pattern_array();
-        if (!__pats)
+        CFArrayRef pats = make_pattern_array();
+        if (!pats)
         {
-          CFRelease(__store_);
-          __store_ = nullptr;
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          CFRelease(store_);
+          store_ = nullptr;
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"netx pattern "
                                                                         "CFArrayCreate failed"}));
           return;
         }
-        Boolean const __ok = SCDynamicStoreSetNotificationKeys(__store_, nullptr, __pats);
-        CFRelease(__pats);
-        if (!__ok)
+        Boolean const ok = SCDynamicStoreSetNotificationKeys(store_, nullptr, pats);
+        CFRelease(pats);
+        if (!ok)
         {
-          CFRelease(__store_);
-          __store_ = nullptr;
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          CFRelease(store_);
+          store_ = nullptr;
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"SCDynamicStoreSetNotificat"
                                                                         "ionKeys failed"}));
           return;
         }
 
         // Bind the store to our serial dispatch queue. From this point on,
-        // __on_change_cb fires on __queue_.
-        if (!SCDynamicStoreSetDispatchQueue(__store_, __queue_))
+        // on_change_cb fires on queue_.
+        if (!SCDynamicStoreSetDispatchQueue(store_, queue_))
         {
-          CFRelease(__store_);
-          __store_ = nullptr;
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          CFRelease(store_);
+          store_ = nullptr;
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"SCDynamicStoreSetDispatchQ"
                                                                         "ueue failed"}));
           return;
         }
 
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
 
-      void deliver(interface_change_event __ev) noexcept override
+      void deliver(interface_change_event ev) noexcept override
       {
-        if (__stop_requested_.load(std::memory_order_acquire))
+        if (stop_requested_.load(std::memory_order_acquire))
           return;
 
-        __delivery_state_ = 0;
+        delivery_state_ = 0;
 
         try
         {
-          __next_op_.reset(new __next_op_t(
-            stdexec::connect(exec::set_next(__rcvr_, stdexec::just(std::move(__ev))),
-                             __next_receiver_t{this})));
-          stdexec::start(*__next_op_);
+          next_op_.reset(new next_op_t(
+            stdexec::connect(exec::set_next(rcvr_, stdexec::just(std::move(ev))),
+                             next_receiver_t{this})));
+          stdexec::start(*next_op_);
         }
         catch (...)
         {
-          __error_          = std::current_exception();
-          __delivery_state_ = 3;
-          __delivery_done_.release();
+          error_          = std::current_exception();
+          delivery_state_ = 3;
+          delivery_done_.release();
         }
 
-        __delivery_done_.acquire();
-        int const __state = __delivery_state_;
-        __next_op_.reset();
+        delivery_done_.acquire();
+        int const state = delivery_state_;
+        next_op_.reset();
 
-        if (__state == 2)
+        if (state == 2)
         {
-          __stop_requested_.store(true, std::memory_order_release);
-          __schedule_finish_stopped();
+          stop_requested_.store(true, std::memory_order_release);
+          schedule_finish_stopped();
         }
-        else if (__state == 3)
+        else if (state == 3)
         {
-          __stop_requested_.store(true, std::memory_order_release);
-          __schedule_finish_error(std::move(__error_));
+          stop_requested_.store(true, std::memory_order_release);
+          schedule_finish_error(std::move(error_));
         }
       }
 
-      void __schedule_finish_stopped() noexcept
+      void schedule_finish_stopped() noexcept
       {
         dispatch_async_f(
-          __queue_,
+          queue_,
           this,
-          +[](void* __p) noexcept
+          +[](void* p) noexcept
           {
-            auto* __o = static_cast<__op*>(__p);
-            if (!__o->__store_)
+            auto* o = static_cast<op*>(p);
+            if (!o->store_)
               return;
-            __o->__teardown_session();
-            stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+            o->teardown_session();
+            stdexec::set_stopped(static_cast<Rcvr&&>(o->rcvr_));
           });
       }
 
-      void __schedule_finish_error(std::exception_ptr __ep) noexcept
+      void schedule_finish_error(std::exception_ptr ep) noexcept
       {
-        struct __closure
+        struct closure
         {
-          __op*              __o;
-          std::exception_ptr __ep;
+          op*              o;
+          std::exception_ptr ep;
         };
-        auto* __c = new __closure{this, std::move(__ep)};
+        auto* c = new closure{this, std::move(ep)};
         dispatch_async_f(
-          __queue_,
-          __c,
-          +[](void* __p) noexcept
+          queue_,
+          c,
+          +[](void* p) noexcept
           {
-            std::unique_ptr<__closure> __cu{static_cast<__closure*>(__p)};
-            if (!__cu->__o->__store_)
+            std::unique_ptr<closure> cu{static_cast<closure*>(p)};
+            if (!cu->o->store_)
               return;
-            __cu->__o->__teardown_session();
-            stdexec::set_error(static_cast<_Rcvr&&>(__cu->__o->__rcvr_), std::move(__cu->__ep));
+            cu->o->teardown_session();
+            stdexec::set_error(static_cast<Rcvr&&>(cu->o->rcvr_), std::move(cu->ep));
           });
       }
 
-      void __teardown_session() noexcept
+      void teardown_session() noexcept
       {
-        if (!__store_)
+        if (!store_)
           return;
         // Detach dispatch queue first to bar new callbacks before release.
-        SCDynamicStoreSetDispatchQueue(__store_, nullptr);
-        CFRelease(__store_);
-        __store_ = nullptr;
-        __stop_cb_.reset();
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        SCDynamicStoreSetDispatchQueue(store_, nullptr);
+        CFRelease(store_);
+        store_ = nullptr;
+        stop_cb_.reset();
+        ctx_->active_.store(nullptr, std::memory_order_release);
       }
     };
 
-    template <class _Rcvr>
-    void __op<_Rcvr>::__on_stop_fn::operator()() noexcept
+    template <class Rcvr>
+    void op<Rcvr>::on_stop_fn::operator()() noexcept
     {
-      __self_->__stop_requested_.store(true, std::memory_order_release);
+      self_->stop_requested_.store(true, std::memory_order_release);
       dispatch_async_f(
-        __self_->__queue_,
-        __self_,
-        +[](void* __p) noexcept
+        self_->queue_,
+        self_,
+        +[](void* p) noexcept
         {
-          auto* __o = static_cast<__op*>(__p);
-          if (!__o->__store_)
+          auto* o = static_cast<op*>(p);
+          if (!o->store_)
             return;  // deliver() already finished us
-          __o->__teardown_session();
-          stdexec::set_stopped(static_cast<_Rcvr&&>(__o->__rcvr_));
+          o->teardown_session();
+          stdexec::set_stopped(static_cast<Rcvr&&>(o->rcvr_));
         });
     }
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__delivery_state_ = 1;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 1;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__delivery_state_ = 2;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 2;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
       {
-        __self_->__error_ = std::forward<_E>(__e);
+        self_->error_ = std::forward<E>(e);
       }
       else
       {
-        __self_->__error_ = std::make_exception_ptr(std::forward<_E>(__e));
+        self_->error_ = std::make_exception_ptr(std::forward<E>(e));
       }
-      __self_->__delivery_state_ = 3;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 3;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -424,23 +424,23 @@ namespace netx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<interface_change_event>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<interface_change_event>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      net_context*  __ctx_;
-      watch_options __opts_;
+      net_context*  ctx_;
+      watch_options opts_;
 
-      template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::libdispatch_scheduler>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      template <stdexec::receiver Rcvr>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<Rcvr>, exec::libdispatch_scheduler>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
-  inline auto net_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto net_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, __opts};
+    return {this, opts};
   }
 }  // namespace netx

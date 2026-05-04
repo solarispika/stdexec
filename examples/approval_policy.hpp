@@ -94,21 +94,21 @@ namespace approval
   // policy is monostate — wrappers typically pass `true` ("allow if
   // unconfigured") to match the prior no-callback behavior.
   template <class Info, class InfoFactory>
-  bool resolve_verdict(policy<Info> const &__p,
-                       InfoFactory       &&__make_info,
-                       bool                __default_when_empty = true)
+  bool resolve_verdict(policy<Info> const &p,
+                       InfoFactory       &&make_info,
+                       bool                default_when_empty = true)
   {
     return std::visit(
-      [&](auto const &__pp) -> bool
+      [&](auto const &pp) -> bool
       {
-        using __T = std::decay_t<decltype(__pp)>;
-        if constexpr (std::is_same_v<__T, std::monostate>)
+        using T = std::decay_t<decltype(pp)>;
+        if constexpr (std::is_same_v<T, std::monostate>)
         {
-          return __default_when_empty;
+          return default_when_empty;
         }
-        else if constexpr (std::is_same_v<__T, sync<Info>>)
+        else if constexpr (std::is_same_v<T, sync<Info>>)
         {
-          return __pp.predicate(__make_info());
+          return pp.predicate(make_info());
         }
         else  // bounded<Info>
         {
@@ -116,50 +116,50 @@ namespace approval
           // a `t.detach()` after timeout cannot leave the worker
           // holding references into our stack frame or into the
           // user-owned policy variant.
-          auto       __pred             = __pp.predicate;
-          bool const __on_timeout_allow = __pp.on_timeout_allow;
-          auto const __timeout          = __pp.timeout;
+          auto       pred             = pp.predicate;
+          bool const on_timeout_allow = pp.on_timeout_allow;
+          auto const timeout          = pp.timeout;
 
           // The source must outlive the worker — `inplace_stop_token`
           // is a non-owning pointer back to the source. After
           // `t.detach()` the worker can outlive this stack frame, so
           // share ownership via shared_ptr captured in the worker's
           // closure.
-          auto __src = std::make_shared<stdexec::inplace_stop_source>();
-          auto __pr  = std::make_shared<std::promise<bool>>();
-          auto __fut = __pr->get_future();
+          auto src = std::make_shared<stdexec::inplace_stop_source>();
+          auto pr  = std::make_shared<std::promise<bool>>();
+          auto fut = pr->get_future();
 
-          std::thread __worker(
-            [__pred = std::move(__pred),
-             __info = __make_info(),
-             __src,
-             __on_timeout_allow,
-             __pr]() mutable
+          std::thread worker(
+            [pred = std::move(pred),
+             info = make_info(),
+             src,
+             on_timeout_allow,
+             pr]() mutable
             {
               try
               {
-                __pr->set_value(__pred(std::move(__info), __src->get_token()));
+                pr->set_value(pred(std::move(info), src->get_token()));
               }
               catch (...)
               {
-                __pr->set_value(__on_timeout_allow);
+                pr->set_value(on_timeout_allow);
               }
             });
 
-          if (__fut.wait_for(__timeout) == std::future_status::ready)
+          if (fut.wait_for(timeout) == std::future_status::ready)
           {
-            __worker.join();
-            return __fut.get();
+            worker.join();
+            return fut.get();
           }
           // Past timeout: signal the predicate to bail (cooperatively;
           // a predicate that ignores the token will keep running on
           // the detached thread until it returns naturally), then
           // commit to the default verdict.
-          __src->request_stop();
-          __worker.detach();
-          return __on_timeout_allow;
+          src->request_stop();
+          worker.detach();
+          return on_timeout_allow;
         }
       },
-      __p);
+      p);
   }
 }  // namespace approval

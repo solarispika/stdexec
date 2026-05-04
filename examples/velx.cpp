@@ -34,28 +34,28 @@ auto main() -> int
               "  - Plug/unplug a USB drive to trigger events, OR\n"
               "  - Run from another terminal:  Mount-VHD / Dismount-VHD foo.vhdx (admin)\n");
 
-  exec::windows_thread_pool __wtp{2, 4};
+  exec::windows_thread_pool wtp{2, 4};
 
-  velx::volume_context __ctx;
+  velx::volume_context ctx;
 
   // Timer pool drives the cancellation deadline. Using an inline `just()`
   // would race with when_any's child startup (timer fires before the
   // watch is connected). Mirrors the DA / RDC pool demos.
-  exec::static_thread_pool __timer_pool{1};
-  auto                     __timer_sched = __timer_pool.get_scheduler();
+  exec::static_thread_pool timer_pool{1};
+  auto                     timer_sched = timer_pool.get_scheduler();
 
   stdexec::sync_wait(
-    exec::when_any(stdexec::starts_on(__timer_sched, stdexec::just())
+    exec::when_any(stdexec::starts_on(timer_sched, stdexec::just())
                      | stdexec::then([] { std::this_thread::sleep_for(30s); }),
-                   exec::sequence_with_scheduler(__wtp.get_scheduler(), __ctx.watch())
+                   exec::sequence_with_scheduler(wtp.get_scheduler(), ctx.watch())
                      | exec::transform_each(stdexec::then(
-                       [](velx::volume_event __ev)
+                       [](velx::volume_event ev)
                        {
-                         char const * __label = __ev.kind
+                         char const * label = ev.kind
                                                  == velx::volume_event_kind::interface_arrival
                                                 ? "[arrival]"
                                                 : "[removal]";
-                         std::printf("%s %s\n", __label, __ev.device_path.c_str());
+                         std::printf("%s %s\n", label, ev.device_path.c_str());
                        }))
                      | exec::ignore_all_values()));
 

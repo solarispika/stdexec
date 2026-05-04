@@ -35,66 +35,66 @@ using namespace std::chrono_literals;
 
 auto main() -> int
 {
-  auto __dir = fs::temp_directory_path() / "fsx_demo";
-  fs::create_directories(__dir);
-  for (auto const & __e: fs::directory_iterator{__dir})
+  auto dir = fs::temp_directory_path() / "fsx_demo";
+  fs::create_directories(dir);
+  for (auto const & e: fs::directory_iterator{dir})
   {
-    fs::remove_all(__e.path());
+    fs::remove_all(e.path());
   }
-  __dir = fs::canonical(__dir);  // FSEvents needs resolved (/private/...) paths
-  std::printf("watching %s\n", __dir.c_str());
+  dir = fs::canonical(dir);  // FSEvents needs resolved (/private/...) paths
+  std::printf("watching %s\n", dir.c_str());
 
-  fsx::fsevents_context __ctx{{__dir.string()}};
+  fsx::fsevents_context ctx{{dir.string()}};
 
-  std::atomic<bool> __mutator_stop{false};
-  std::thread       __mutator{[&]
+  std::atomic<bool> mutator_stop{false};
+  std::thread       mutator{[&]
                         {
-                          for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+                          for (int i = 0; !mutator_stop.load() && i < 5; ++i)
                           {
                             std::this_thread::sleep_for(400ms);
-                            std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
-                            __f << "hello " << __i << "\n";
+                            std::ofstream f{dir / ("file_" + std::to_string(i) + ".txt")};
+                            f << "hello " << i << "\n";
                           }
                         }};
 
   // Run the watch until the timer wins, demonstrating cancellation through the
   // sequence-sender pipeline.
-  exec::static_thread_pool __pool{1};
-  auto                     __sched    = __pool.get_scheduler();
-  exec::libdispatch_queue  __fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.demo");
+  exec::static_thread_pool pool{1};
+  auto                     sched    = pool.get_scheduler();
+  exec::libdispatch_queue  fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.demo");
   stdexec::sync_wait(
-    exec::when_any(stdexec::starts_on(__sched, stdexec::just())
+    exec::when_any(stdexec::starts_on(sched, stdexec::just())
                      | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                   exec::sequence_with_scheduler(__fsx_pool.get_scheduler(), __ctx.watch())
+                   exec::sequence_with_scheduler(fsx_pool.get_scheduler(), ctx.watch())
                      | exec::transform_each(stdexec::then(
-                       [&](fsx::fs_batch __b)
+                       [&](fsx::fs_batch b)
                        {
-                         if (__b.must_rescan)
+                         if (b.must_rescan)
                            std::printf("[rescan requested] flags imply "
                                        "MustScanSubDirs/RootChanged\n");
-                         for (auto const & __e: __b.events)
+                         for (auto const & e: b.events)
                          {
-                           if (fsx::is_drop_notice(__e))
+                           if (fsx::is_drop_notice(e))
                            {
                              std::printf("[drop notice] flags=%#x path=%s\n",
-                                         static_cast<unsigned>(__e.flags),
-                                         __e.path.c_str());
+                                         static_cast<unsigned>(e.flags),
+                                         e.path.c_str());
                              continue;
                            }
                            std::printf("event id=%llu flags=%#x path=%s\n",
-                                       static_cast<unsigned long long>(__e.id),
-                                       static_cast<unsigned>(__e.flags),
-                                       __e.path.c_str());
+                                       static_cast<unsigned long long>(e.id),
+                                       static_cast<unsigned>(e.flags),
+                                       e.path.c_str());
                          }
                          std::printf("checkpoint id=%llu\n",
-                                     static_cast<unsigned long long>(__b.last_id));
+                                     static_cast<unsigned long long>(b.last_id));
                        }))
                      | exec::ignore_all_values()));
 
-  __mutator_stop.store(true);
-  __mutator.join();
+  mutator_stop.store(true);
+  mutator.join();
 
   std::printf("final last_completed_id = %llu\n",
-              static_cast<unsigned long long>(__ctx.last_completed_id()));
+              static_cast<unsigned long long>(ctx.last_completed_id()));
   return 0;
 }

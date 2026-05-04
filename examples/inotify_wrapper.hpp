@@ -68,93 +68,93 @@ namespace inx
 
   class inotify_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base;
-    template <class _Rcvr>
-    struct __op;
-    template <class _Rcvr>
-    struct __next_receiver;
-    struct __watch_sender;
-  }  // namespace __detail
+    struct op_base;
+    template <class Rcvr>
+    struct op;
+    template <class Rcvr>
+    struct next_receiver;
+    struct watch_sender;
+  }  // namespace detail
 
   class inotify_context
   {
    public:
-    explicit inotify_context(std::vector<std::string> __initial_paths,
-                             std::uint32_t            __default_mask = watch_options{}.mask);
+    explicit inotify_context(std::vector<std::string> initial_paths,
+                             std::uint32_t            default_mask = watch_options{}.mask);
     ~inotify_context();
 
     inotify_context(inotify_context const &)                    = delete;
     auto operator=(inotify_context const &) -> inotify_context& = delete;
 
     auto
-    add_watch(std::string_view __path, std::optional<std::uint32_t> __mask = std::nullopt) -> int;
+    add_watch(std::string_view path, std::optional<std::uint32_t> mask = std::nullopt) -> int;
 
-    auto remove_watch(int __wd) noexcept -> bool;
+    auto remove_watch(int wd) noexcept -> bool;
 
-    auto path_for(int __wd) const -> std::optional<std::string>;
+    auto path_for(int wd) const -> std::optional<std::string>;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    template <class _Rcvr>
-    friend struct __detail::__next_receiver;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    template <class Rcvr>
+    friend struct detail::next_receiver;
+    friend struct detail::watch_sender;
 
-    int                                  __fd_{-1};
-    std::uint32_t                        __default_mask_{};
-    mutable std::mutex                   __map_mu_;
-    std::unordered_map<int, std::string> __wd_to_path_;
-    std::atomic<__detail::__op_base*>    __active_{nullptr};
+    int                                  fd_{-1};
+    std::uint32_t                        default_mask_{};
+    mutable std::mutex                   map_mu_;
+    std::unordered_map<int, std::string> wd_to_path_;
+    std::atomic<detail::op_base*>    active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base()                                               = default;
-      virtual void __on_read_complete(::io_uring_cqe const &) noexcept   = 0;
-      virtual void __on_cancel_complete(::io_uring_cqe const &) noexcept = 0;
-      virtual void __on_finalize_complete() noexcept                     = 0;
+      virtual ~op_base()                                               = default;
+      virtual void on_read_complete(::io_uring_cqe const &) noexcept   = 0;
+      virtual void on_cancel_complete(::io_uring_cqe const &) noexcept = 0;
+      virtual void on_finalize_complete() noexcept                     = 0;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
-    // Thin __io_task base that defers to its outer __op via a back-pointer.
-    struct __read_task
+    // Thin io_task base that defers to its outer op via a back-pointer.
+    struct read_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
-      int                                             __fd_;
-      void*                                           __buf_;
-      std::size_t                                     __buf_len_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
+      int                                             fd_;
+      void*                                           buf_;
+      std::size_t                                     buf_len_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -162,40 +162,40 @@ namespace inx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_READ;
-        __sqe.fd     = __fd_;
-        __sqe.addr   = reinterpret_cast<std::uint64_t>(__buf_);
-        __sqe.len    = static_cast<std::uint32_t>(__buf_len_);
-        __sqe.off    = 0;
-        // user_data is set by __io_uring_context::submit().
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_READ;
+        sqe.fd     = fd_;
+        sqe.addr   = reinterpret_cast<std::uint64_t>(buf_);
+        sqe.len    = static_cast<std::uint32_t>(buf_len_);
+        sqe.off    = 0;
+        // user_data is set by io_uring_context::submit().
       }
 
-      void complete(::io_uring_cqe const & __cqe) noexcept
+      void complete(::io_uring_cqe const & cqe) noexcept
       {
-        __outer_->__on_read_complete(__cqe);
+        outer_->on_read_complete(cqe);
       }
     };
 
-    using __read_op_t = experimental::execution::__io_uring::__io_task_facade<__read_task>;
+    using read_op_t = experimental::execution::__io_uring::__io_task_facade<read_task>;
 
     // Single-shot SQE that cancels another in-flight task by user_data.
-    // The target task's user_data is its __task* (set by io_uring_context).
-    // Like __read_task, this holds a back-pointer to the outer __op so its
+    // The target task's user_data is its task* (set by io_uring_context).
+    // Like read_task, this holds a back-pointer to the outer op so its
     // complete() callback can decrement the pending-CQE counter — without
     // it, the read CQE could drive teardown and free the cancel facade
     // memory before the kernel posted the cancel CQE (UAF in the reactor).
-    struct __cancel_task
+    struct cancel_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
-      void*                                           __target_user_data_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
+      void*                                           target_user_data_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -203,40 +203,40 @@ namespace inx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_ASYNC_CANCEL;
-        __sqe.addr   = reinterpret_cast<std::uint64_t>(__target_user_data_);
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_ASYNC_CANCEL;
+        sqe.addr   = reinterpret_cast<std::uint64_t>(target_user_data_);
       }
 
-      void complete(::io_uring_cqe const & __cqe) noexcept
+      void complete(::io_uring_cqe const & cqe) noexcept
       {
         // Cancellation result is discarded — the target task's own complete()
         // path is what drives the finish kind. -ENOENT (already done) and
         // 0 (cancelled) are both valid outcomes. We only need to inform
         // the outer op that the cancel CQE has now landed.
-        __outer_->__on_cancel_complete(__cqe);
+        outer_->on_cancel_complete(cqe);
       }
     };
 
-    using __cancel_op_t = experimental::execution::__io_uring::__io_task_facade<__cancel_task>;
+    using cancel_op_t = experimental::execution::__io_uring::__io_task_facade<cancel_task>;
 
     // Deferred-finalize trampoline: submits an IORING_OP_NOP whose CQE arrives
     // back on the reactor in a fresh frame. This is the unique safe site for
-    // calling __finalize_and_complete — no matter whether the original
+    // calling finalize_and_complete — no matter whether the original
     // "want-to-finish" trigger came from a CQE handler or from an async
     // downstream receiver callback, the NOP CQE delivers in a stack frame
     // that has fully unwound from any nested set_next chain. Same shape as
-    // rdc_pool_wrapper.hpp's __schedule_cleanup + SubmitThreadpoolWork.
-    struct __finalize_task
+    // rdc_pool_wrapper.hpp's schedule_cleanup + SubmitThreadpoolWork.
+    struct finalize_task
     {
-      __op_base*                                      __outer_;
-      experimental::execution::__io_uring::__context* __ctx_;
+      op_base*                                      outer_;
+      experimental::execution::__io_uring::__context* ctx_;
 
       auto context() noexcept -> experimental::execution::__io_uring::__context&
       {
-        return *__ctx_;
+        return *ctx_;
       }
 
       static constexpr auto ready() noexcept -> bool
@@ -244,411 +244,411 @@ namespace inx
         return false;
       }
 
-      void submit(::io_uring_sqe& __sqe) noexcept
+      void submit(::io_uring_sqe& sqe) noexcept
       {
-        std::memset(&__sqe, 0, sizeof(__sqe));
-        __sqe.opcode = IORING_OP_NOP;
+        std::memset(&sqe, 0, sizeof(sqe));
+        sqe.opcode = IORING_OP_NOP;
       }
 
       void complete(::io_uring_cqe const &) noexcept
       {
-        __outer_->__on_finalize_complete();
+        outer_->on_finalize_complete();
       }
     };
 
-    using __finalize_op_t = experimental::execution::__io_uring::__io_task_facade<__finalize_task>;
+    using finalize_op_t = experimental::execution::__io_uring::__io_task_facade<finalize_task>;
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<fs_batch>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<fs_batch>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      enum class __finish_kind
+      enum class finish_kind
       {
-        __none,
-        __stopped,
-        __error
+        none,
+        stopped,
+        error
       };
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept
         {
-          __self_->__stop_requested_.store(true, std::memory_order_release);
+          self_->stop_requested_.store(true, std::memory_order_release);
 
           // Defensive: stop_callback semantics fire at most once, but if a
           // future caller re-arms a stop source we'd double-emplace
-          // __cancel_op_. Guard against that.
-          if (__self_->__cancel_op_.has_value())
+          // cancel_op_. Guard against that.
+          if (self_->cancel_op_.has_value())
           {
             return;
           }
 
-          // Read the in-flight READ's user_data (its __task*) atomically.
-          // We MUST NOT touch __read_op_ directly here — the reactor thread
-          // may be in __post_read calling __read_op_.emplace, which destroys
+          // Read the in-flight READ's user_data (its task*) atomically.
+          // We MUST NOT touch read_op_ directly here — the reactor thread
+          // may be in post_read calling read_op_.emplace, which destroys
           // and reconstructs the optional in place; concurrent access is UB.
-          // The shadow pointer is published by __post_read after emplace and
-          // cleared by __finalize_and_complete; a stale read is harmless
+          // The shadow pointer is published by post_read after emplace and
+          // cleared by finalize_and_complete; a stale read is harmless
           // because the kernel returns -ENOENT for a missed target.
-          auto* __tgt = __self_->__read_user_data_.load(std::memory_order_acquire);
-          if (__tgt == nullptr)
+          auto* tgt = self_->read_user_data_.load(std::memory_order_acquire);
+          if (tgt == nullptr)
           {
             return;
           }
           // Account for the cancel CQE we are about to submit — the read CQE
           // and the cancel CQE will both arrive, in that order, so finalize
           // must not run until both have been observed.
-          __self_->__pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-          __self_->__cancel_op_.emplace(std::in_place,
-                                        __cancel_task{static_cast<__op_base*>(__self_),
-                                                      __self_->__ring_,
-                                                      __tgt});
-          __self_->__cancel_op_->start();
+          self_->pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+          self_->cancel_op_.emplace(std::in_place,
+                                        cancel_task{static_cast<op_base*>(self_),
+                                                      self_->ring_,
+                                                      tgt});
+          self_->cancel_op_->start();
         }
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      inotify_context*                                __ctx_;
-      watch_options                                   __opts_;
-      _Rcvr                                           __rcvr_;
-      experimental::execution::__io_uring::__context* __ring_;
+      inotify_context*                                ctx_;
+      watch_options                                   opts_;
+      Rcvr                                           rcvr_;
+      experimental::execution::__io_uring::__context* ring_;
       // uint64_t (alignment 8) guarantees the >=4-byte alignment that
       // ::inotify_event requires for its int wd / uint32_t fields.
       // std::vector<std::byte>::data() is only aligned to alignof(byte)==1
       // by the standard. Same trick as rdc_pool_wrapper.hpp's vector<DWORD>.
-      std::vector<std::uint64_t>       __buffer_;
-      std::vector<fs_event>            __staging_;
-      std::optional<__read_op_t>       __read_op_;
-      std::optional<__cancel_op_t>     __cancel_op_;
-      std::optional<__finalize_op_t>   __finalize_op_;
-      std::unique_ptr<__next_op_t>     __next_op_;
-      std::optional<__stop_callback_t> __stop_cb_;
-      std::atomic<bool>                __stop_requested_{false};
+      std::vector<std::uint64_t>       buffer_;
+      std::vector<fs_event>            staging_;
+      std::optional<read_op_t>       read_op_;
+      std::optional<cancel_op_t>     cancel_op_;
+      std::optional<finalize_op_t>   finalize_op_;
+      std::unique_ptr<next_op_t>     next_op_;
+      std::optional<stop_callback_t> stop_cb_;
+      std::atomic<bool>                stop_requested_{false};
       // CAS-gated single-shot flag: only the first caller of
-      // __request_finalize submits the NOP. Subsequent callers no-op so the
+      // request_finalize submits the NOP. Subsequent callers no-op so the
       // counter dance and the finish_kind aren't disturbed.
-      std::atomic<bool> __finalize_scheduled_{false};
-      // Shadow of the in-flight READ facade's __task*. Published (release) by
-      // __post_read after emplace, read (acquire) by __on_stop_fn off-thread.
-      std::atomic<experimental::execution::__io_uring::__task*> __read_user_data_{nullptr};
+      std::atomic<bool> finalize_scheduled_{false};
+      // Shadow of the in-flight READ facade's task*. Published (release) by
+      // post_read after emplace, read (acquire) by on_stop_fn off-thread.
+      std::atomic<experimental::execution::__io_uring::__task*> read_user_data_{nullptr};
       // Counts CQEs we expect: each posted READ + each posted CANCEL adds 1,
       // each delivered CQE subtracts 1. Finalize fires only when this reaches
-      // 0 with a finish_kind set. Mirrors the __n_ops_ pattern used by
+      // 0 with a finish_kind set. Mirrors the n_ops_ pattern used by
       // __stoppable_task_facade::__stop_operation in io_uring_context.hpp.
-      std::atomic<int> __pending_cqes_{0};
-      // __finish_kind_ is written by the unique winner of the
-      // __finalize_scheduled_ CAS in __request_finalize, and read by
-      // __finalize_and_complete (running in the NOP CQE's reactor frame).
+      std::atomic<int> pending_cqes_{0};
+      // finish_kind_ is written by the unique winner of the
+      // finalize_scheduled_ CAS in request_finalize, and read by
+      // finalize_and_complete (running in the NOP CQE's reactor frame).
       // The CAS publishes the write; the kernel's CQE delivery
       // happens-before the read. Plain (non-atomic) is therefore safe.
-      __finish_kind      __finish_kind_{__finish_kind::__none};
-      std::exception_ptr __error_;
+      finish_kind      finish_kind_{finish_kind::none};
+      std::exception_ptr error_;
 
-      explicit __op(inotify_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{__o}
-        , __rcvr_{std::move(__r)}
+      explicit op(inotify_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{o}
+        , rcvr_{std::move(r)}
       {
-        auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
-        __ring_      = __sched.__context_;
+        auto sched = stdexec::get_scheduler(stdexec::get_env(rcvr_));
+        ring_      = sched.__context_;
         // Round buffer_size up to the next uint64_t.
-        __buffer_.resize((__opts_.buffer_size + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t));
+        buffer_.resize((opts_.buffer_size + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t));
       }
 
       void start() & noexcept
       {
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"inotify_context already "
                                                                         "has an active watch"}));
           return;
         }
-        __post_read();
+        post_read();
 
         // Register stop callback last: if the token is already in stop state
         // it fires synchronously, which is now safe because the read is up.
         // Same pattern as fsevents_wrapper / rdc_wrapper.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
 
-      void __post_read() noexcept
+      void post_read() noexcept
       {
-        // Each read posts a fresh __io_task_facade. The previous one (if any)
+        // Each read posts a fresh io_task_facade. The previous one (if any)
         // has already had its complete() returned. Destructing the previous
         // here is safe because we are not nested in its callback (we are
         // either in start() or in next_receiver::set_value).
-        // Note: __io_task_facade has two ctor overloads; overload (B) takes
-        // _Args... matching _Base's own ctor, overload (A) takes
-        // (__task* parent, _Args...). __read_task is an aggregate with no
-        // leading __task* field, so overload (B) wins and __base_ is
+        // Note: io_task_facade has two ctor overloads; overload (B) takes
+        // Args... matching Base's own ctor, overload (A) takes
+        // (task* parent, Args...). read_task is an aggregate with no
+        // leading task* field, so overload (B) wins and base_ is
         // copy/move-constructed from our brace-init. If a future change
-        // adds a leading __task* member to __read_task it would silently
-        // flip overload selection — keep the leading member as __op_base*.
+        // adds a leading task* member to read_task it would silently
+        // flip overload selection — keep the leading member as op_base*.
 
         // Increment BEFORE the emplace+submit so that even if the CQE were
         // delivered synchronously by submit() (it isn't, but) the matching
-        // decrement in __on_read_complete sees a non-zero pre-state.
-        __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-        __read_op_.emplace(std::in_place,
-                           __read_task{static_cast<__op_base*>(this),
-                                       __ring_,
-                                       __ctx_->__fd_,
-                                       __buffer_.data(),
-                                       __buffer_.size() * sizeof(std::uint64_t)});
-        // Publish the new facade's __task* for __on_stop_fn to read with
+        // decrement in on_read_complete sees a non-zero pre-state.
+        pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+        read_op_.emplace(std::in_place,
+                           read_task{static_cast<op_base*>(this),
+                                       ring_,
+                                       ctx_->fd_,
+                                       buffer_.data(),
+                                       buffer_.size() * sizeof(std::uint64_t)});
+        // Publish the new facade's task* for on_stop_fn to read with
         // release ordering. Must happen AFTER emplace and BEFORE start() so
         // a stop callback that fires concurrently sees the new pointer.
-        auto* __tgt = static_cast<experimental::execution::__io_uring::__task*>(&*__read_op_);
-        __read_user_data_.store(__tgt, std::memory_order_release);
-        __read_op_->start();
+        auto* tgt = static_cast<experimental::execution::__io_uring::__task*>(&*read_op_);
+        read_user_data_.store(tgt, std::memory_order_release);
+        read_op_->start();
       }
 
       // Single entry to "we want to finish". CAS-gated so concurrent
-      // requests collapse to one NOP submission. Increments __pending_cqes_
+      // requests collapse to one NOP submission. Increments pending_cqes_
       // so that the NOP CQE is part of the same counter dance as the read
-      // and (optional) cancel CQEs — __on_finalize_complete is the unique
-      // last-out site that actually drives __finalize_and_complete.
-      void __request_finalize(__finish_kind __k) noexcept
+      // and (optional) cancel CQEs — on_finalize_complete is the unique
+      // last-out site that actually drives finalize_and_complete.
+      void request_finalize(finish_kind k) noexcept
       {
-        bool __expected = false;
-        if (!__finalize_scheduled_.compare_exchange_strong(__expected,
+        bool expected = false;
+        if (!finalize_scheduled_.compare_exchange_strong(expected,
                                                            true,
                                                            std::memory_order_acq_rel))
         {
           return;
         }
-        __finish_kind_ = __k;
-        __pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
-        __finalize_op_.emplace(std::in_place,
-                               __finalize_task{static_cast<__op_base*>(this), __ring_});
-        __finalize_op_->start();
+        finish_kind_ = k;
+        pending_cqes_.fetch_add(1, std::memory_order_acq_rel);
+        finalize_op_.emplace(std::in_place,
+                               finalize_task{static_cast<op_base*>(this), ring_});
+        finalize_op_->start();
       }
 
       // Called on the io_uring reactor thread.
-      void __on_read_complete(::io_uring_cqe const & __cqe) noexcept override
+      void on_read_complete(::io_uring_cqe const & cqe) noexcept override
       {
         // The READ CQE is in. Clear the published shadow user_data so any
         // stop callback that fires from this point on does NOT submit a
         // cancel for a target that just landed (it would only race the
-        // next __post_read's republish anyway, but keep it tidy).
-        __read_user_data_.store(nullptr, std::memory_order_release);
+        // next post_read's republish anyway, but keep it tidy).
+        read_user_data_.store(nullptr, std::memory_order_release);
 
-        if (__cqe.res < 0)
+        if (cqe.res < 0)
         {
-          if (__cqe.res == -ECANCELED || __stop_requested_.load(std::memory_order_acquire))
+          if (cqe.res == -ECANCELED || stop_requested_.load(std::memory_order_acquire))
           {
-            __request_finalize(__finish_kind::__stopped);
+            request_finalize(finish_kind::stopped);
           }
           else
           {
-            __error_ = std::make_exception_ptr(
-              std::system_error{-__cqe.res, std::system_category(), "inotify read"});
-            __request_finalize(__finish_kind::__error);
+            error_ = std::make_exception_ptr(
+              std::system_error{-cqe.res, std::system_category(), "inotify read"});
+            request_finalize(finish_kind::error);
           }
         }
         else
         {
-          __parse_into_staging(static_cast<std::size_t>(__cqe.res));
+          parse_into_staging(static_cast<std::size_t>(cqe.res));
 
-          bool __overflow = false;
+          bool overflow = false;
           // IN_Q_OVERFLOW arrives as a synthetic event with wd=-1; surface it
           // batch-level and remove it from the events span.
-          std::erase_if(__staging_,
-                        [&](fs_event const & __e)
+          std::erase_if(staging_,
+                        [&](fs_event const & e)
                         {
-                          if (__e.wd == -1 && (__e.mask & IN_Q_OVERFLOW))
+                          if (e.wd == -1 && (e.mask & IN_Q_OVERFLOW))
                           {
-                            __overflow = true;
+                            overflow = true;
                             return true;
                           }
                           return false;
                         });
 
-          fs_batch __batch{__staging_, __overflow};
+          fs_batch batch{staging_, overflow};
 
           try
           {
-            __next_op_.reset(
-              new __next_op_t(stdexec::connect(exec::set_next(__rcvr_, stdexec::just(__batch)),
-                                               __next_receiver_t{this})));
-            stdexec::start(*__next_op_);
+            next_op_.reset(
+              new next_op_t(stdexec::connect(exec::set_next(rcvr_, stdexec::just(batch)),
+                                               next_receiver_t{this})));
+            stdexec::start(*next_op_);
           }
           catch (...)
           {
-            __error_ = std::current_exception();
-            __request_finalize(__finish_kind::__error);
+            error_ = std::current_exception();
+            request_finalize(finish_kind::error);
           }
         }
 
         // Tail decrement for THIS read CQE. Finalization is NOT triggered
-        // here; the NOP CQE submitted by __request_finalize is the unique
-        // safe-frame finalizer (see __on_finalize_complete). On the steady
-        // value path, __post_read (called from set_value) has already
+        // here; the NOP CQE submitted by request_finalize is the unique
+        // safe-frame finalizer (see on_finalize_complete). On the steady
+        // value path, post_read (called from set_value) has already
         // bumped the counter for the next read, so this dec doesn't strand.
-        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+        pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
       }
 
       // Called on the io_uring reactor thread when the cancel CQE lands.
-      // Plain decrement — finalization is owned by __on_finalize_complete.
-      void __on_cancel_complete(::io_uring_cqe const &) noexcept override
+      // Plain decrement — finalization is owned by on_finalize_complete.
+      void on_cancel_complete(::io_uring_cqe const &) noexcept override
       {
-        __pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
+        pending_cqes_.fetch_sub(1, std::memory_order_acq_rel);
       }
 
-      // The NOP CQE submitted by __request_finalize lands here on the
+      // The NOP CQE submitted by request_finalize lands here on the
       // reactor in a fresh frame. This is the ONE site that calls
-      // __finalize_and_complete — by this point any nested set_next chain
+      // finalize_and_complete — by this point any nested set_next chain
       // has unwound, the read CQE's debt is settled, and (if a cancel was
       // submitted) the cancel CQE has been observed too.
-      void __on_finalize_complete() noexcept override
+      void on_finalize_complete() noexcept override
       {
-        if (__pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        if (pending_cqes_.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
-          __finalize_and_complete();
+          finalize_and_complete();
         }
       }
 
-      void __parse_into_staging(std::size_t __bytes) noexcept
+      void parse_into_staging(std::size_t bytes) noexcept
       {
-        __staging_.clear();
-        auto const * __raw = reinterpret_cast<std::byte const *>(__buffer_.data());
-        std::size_t  __off = 0;
-        while (__off + sizeof(::inotify_event) <= __bytes)
+        staging_.clear();
+        auto const * raw = reinterpret_cast<std::byte const *>(buffer_.data());
+        std::size_t  off = 0;
+        while (off + sizeof(::inotify_event) <= bytes)
         {
-          auto const * __ev     = reinterpret_cast<::inotify_event const *>(__raw + __off);
-          std::size_t  __record = sizeof(::inotify_event) + __ev->len;
-          if (__off + __record > __bytes)
+          auto const * ev     = reinterpret_cast<::inotify_event const *>(raw + off);
+          std::size_t  record = sizeof(::inotify_event) + ev->len;
+          if (off + record > bytes)
             break;
 
           // IN_IGNORED: the kernel has dropped this watch. Clean wd→path map.
-          if ((__ev->mask & IN_IGNORED) && __ev->wd >= 0)
+          if ((ev->mask & IN_IGNORED) && ev->wd >= 0)
           {
-            std::lock_guard __lk{__ctx_->__map_mu_};
-            __ctx_->__wd_to_path_.erase(__ev->wd);
+            std::lock_guard lk{ctx_->map_mu_};
+            ctx_->wd_to_path_.erase(ev->wd);
           }
 
-          std::string __name;
-          if (__ev->len > 0)
+          std::string name;
+          if (ev->len > 0)
           {
             // name is NUL-padded; strlen gives the real size.
-            __name.assign(__ev->name, ::strnlen(__ev->name, __ev->len));
+            name.assign(ev->name, ::strnlen(ev->name, ev->len));
           }
-          __staging_.push_back({__ev->wd, __ev->mask, __ev->cookie, std::move(__name)});
+          staging_.push_back({ev->wd, ev->mask, ev->cookie, std::move(name)});
 
-          __off += __record;
+          off += record;
         }
       }
 
-      void __on_next_value() noexcept
+      void on_next_value() noexcept
       {
-        // Do NOT reset __next_op_ here — downstream may complete synchronously
+        // Do NOT reset next_op_ here — downstream may complete synchronously
         // inside set_next's start(); destroying the op from inside its own
         // set_value call would tear down the call stack. The next batch's
         // unique_ptr::reset(new ...) will destroy this child after start()
         // unwinds.
         //
-        // May run either synchronously from __on_read_complete's
-        // start(*__next_op_) call, OR asynchronously from a downstream that
+        // May run either synchronously from on_read_complete's
+        // start(*next_op_) call, OR asynchronously from a downstream that
         // hops threads. Both cases are handled identically: route through
-        // __request_finalize so the NOP CQE drives termination.
-        if (__stop_requested_.load(std::memory_order_acquire))
+        // request_finalize so the NOP CQE drives termination.
+        if (stop_requested_.load(std::memory_order_acquire))
         {
-          __request_finalize(__finish_kind::__stopped);
+          request_finalize(finish_kind::stopped);
           return;
         }
-        __post_read();
+        post_read();
       }
 
       // Downstream completed with set_stopped. Route through the NOP-CQE
       // trampoline regardless of caller (sync nested or async), so that
-      // __finalize_and_complete always runs in a fresh reactor frame.
-      void __on_next_stopped() noexcept
+      // finalize_and_complete always runs in a fresh reactor frame.
+      void on_next_stopped() noexcept
       {
-        __request_finalize(__finish_kind::__stopped);
+        request_finalize(finish_kind::stopped);
       }
 
       // Downstream completed with set_error — same shape as next_stopped.
-      void __on_next_error(std::exception_ptr __ep) noexcept
+      void on_next_error(std::exception_ptr ep) noexcept
       {
-        __error_ = std::move(__ep);
-        __request_finalize(__finish_kind::__error);
+        error_ = std::move(ep);
+        request_finalize(finish_kind::error);
       }
 
       // The single completion path. Called ONLY from
-      // __on_finalize_complete, which runs in a fresh reactor CQE frame
-      // delivered by the IORING_OP_NOP submitted by __request_finalize.
+      // on_finalize_complete, which runs in a fresh reactor CQE frame
+      // delivered by the IORING_OP_NOP submitted by request_finalize.
       // By this point: every read/cancel CQE has been observed (counter
       // reached 0 with the NOP itself decrementing last), and any nested
-      // set_next chain has unwound — so resetting __next_op_, __cancel_op_,
-      // __read_op_ and the in-flight __finalize_op_ facade we're inside is
-      // safe (the latter mirrors __io_task_facade's documented self-destroy
+      // set_next chain has unwound — so resetting next_op_, cancel_op_,
+      // read_op_ and the in-flight finalize_op_ facade we're inside is
+      // safe (the latter mirrors io_task_facade's documented self-destroy
       // pattern). Drop the stop callback first to prevent a late stop
       // request from observing half-torn-down state, then drop the
       // downstream op, then the io_uring facades, then release the active
       // slot. Finally, complete the user's receiver.
-      void __finalize_and_complete() noexcept
+      void finalize_and_complete() noexcept
       {
-        __stop_cb_.reset();
-        __next_op_.reset();
-        __cancel_op_.reset();
-        __read_op_.reset();
-        __finalize_op_.reset();
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        stop_cb_.reset();
+        next_op_.reset();
+        cancel_op_.reset();
+        read_op_.reset();
+        finalize_op_.reset();
+        ctx_->active_.store(nullptr, std::memory_order_release);
 
-        if (__finish_kind_ == __finish_kind::__error)
+        if (finish_kind_ == finish_kind::error)
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_), std::move(__error_));
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_), std::move(error_));
         }
         else
         {
-          stdexec::set_stopped(static_cast<_Rcvr&&>(__rcvr_));
+          stdexec::set_stopped(static_cast<Rcvr&&>(rcvr_));
         }
       }
     };
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__on_next_value();
+      self_->on_next_value();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__on_next_stopped();
+      self_->on_next_stopped();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
       {
-        __self_->__on_next_error(std::forward<_E>(__e));
+        self_->on_next_error(std::forward<E>(e));
       }
       else
       {
-        __self_->__on_next_error(std::make_exception_ptr(std::forward<_E>(__e)));
+        self_->on_next_error(std::make_exception_ptr(std::forward<E>(e)));
       }
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -656,77 +656,77 @@ namespace inx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<fs_batch>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      inotify_context* __ctx_;
-      watch_options    __opts_;
+      inotify_context* ctx_;
+      watch_options    opts_;
 
-      template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>, exec::io_uring_scheduler>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      template <stdexec::receiver Rcvr>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<Rcvr>, exec::io_uring_scheduler>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
   // ---------- inotify_context impl ----------
 
-  inline inotify_context::inotify_context(std::vector<std::string> __initial_paths,
-                                          std::uint32_t            __default_mask)
-    : __default_mask_{__default_mask}
+  inline inotify_context::inotify_context(std::vector<std::string> initial_paths,
+                                          std::uint32_t            default_mask)
+    : default_mask_{default_mask}
   {
-    __fd_ = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
-    if (__fd_ < 0)
+    fd_ = ::inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
+    if (fd_ < 0)
     {
       throw std::system_error{errno, std::system_category(), "inotify_init1"};
     }
     try
     {
-      for (auto const & __p: __initial_paths)
+      for (auto const & p: initial_paths)
       {
-        add_watch(__p);
+        add_watch(p);
       }
     }
     catch (...)
     {
-      ::close(__fd_);
-      __fd_ = -1;
+      ::close(fd_);
+      fd_ = -1;
       throw;
     }
   }
 
   inline inotify_context::~inotify_context()
   {
-    if (__fd_ >= 0)
+    if (fd_ >= 0)
     {
-      ::close(__fd_);
+      ::close(fd_);
     }
   }
 
   inline auto
-  inotify_context::add_watch(std::string_view __path, std::optional<std::uint32_t> __mask) -> int
+  inotify_context::add_watch(std::string_view path, std::optional<std::uint32_t> mask) -> int
   {
-    std::string __zpath{__path};  // inotify_add_watch needs NUL-terminated
-    int __wd = ::inotify_add_watch(__fd_, __zpath.c_str(), __mask.value_or(__default_mask_));
-    if (__wd < 0)
+    std::string zpath{path};  // inotify_add_watch needs NUL-terminated
+    int wd = ::inotify_add_watch(fd_, zpath.c_str(), mask.value_or(default_mask_));
+    if (wd < 0)
     {
       throw std::system_error{errno, std::system_category(), "inotify_add_watch"};
     }
     {
-      std::lock_guard __lk{__map_mu_};
-      __wd_to_path_[__wd] = std::move(__zpath);
+      std::lock_guard lk{map_mu_};
+      wd_to_path_[wd] = std::move(zpath);
     }
-    return __wd;
+    return wd;
   }
 
-  inline auto inotify_context::remove_watch(int __wd) noexcept -> bool
+  inline auto inotify_context::remove_watch(int wd) noexcept -> bool
   {
     // First confirm we know about this wd. If not, nothing to remove.
     {
-      std::lock_guard __lk{__map_mu_};
-      if (!__wd_to_path_.contains(__wd))
+      std::lock_guard lk{map_mu_};
+      if (!wd_to_path_.contains(wd))
       {
         return false;
       }
@@ -738,31 +738,31 @@ namespace inx
     // (e.g. file unlinked) — treat that as success and clean up the stale
     // map entry. The IN_IGNORED that follows hits an empty map slot
     // (handler is a no-op then).
-    int __rc = ::inotify_rm_watch(__fd_, __wd);
-    if (__rc != 0 && errno != EINVAL)
+    int rc = ::inotify_rm_watch(fd_, wd);
+    if (rc != 0 && errno != EINVAL)
     {
       return false;
     }
     {
-      std::lock_guard __lk{__map_mu_};
-      __wd_to_path_.erase(__wd);
+      std::lock_guard lk{map_mu_};
+      wd_to_path_.erase(wd);
     }
     return true;
   }
 
-  inline auto inotify_context::path_for(int __wd) const -> std::optional<std::string>
+  inline auto inotify_context::path_for(int wd) const -> std::optional<std::string>
   {
-    std::lock_guard __lk{__map_mu_};
-    auto            __it = __wd_to_path_.find(__wd);
-    if (__it == __wd_to_path_.end())
+    std::lock_guard lk{map_mu_};
+    auto            it = wd_to_path_.find(wd);
+    if (it == wd_to_path_.end())
     {
       return std::nullopt;
     }
-    return __it->second;
+    return it->second;
   }
 
-  inline auto inotify_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto inotify_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, __opts};
+    return {this, opts};
   }
 }  // namespace inx

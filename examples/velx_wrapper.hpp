@@ -143,22 +143,22 @@ namespace velx
 
   class volume_context;
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base;
-    template <class _Rcvr>
-    struct __op;
-    template <class _Rcvr>
-    struct __next_receiver;
-    struct __watch_sender;
+    struct op_base;
+    template <class Rcvr>
+    struct op;
+    template <class Rcvr>
+    struct next_receiver;
+    struct watch_sender;
 
-    enum __finish_kind : int
+    enum finish_kind : int
     {
-      __finish_none    = 0,
-      __finish_stopped = 1,
-      __finish_error   = 2,
+      finish_none    = 0,
+      finish_stopped = 1,
+      finish_error   = 2,
     };
-  }  // namespace __detail
+  }  // namespace detail
 
   class volume_context
   {
@@ -169,131 +169,131 @@ namespace velx
     volume_context(volume_context const &)                    = delete;
     auto operator=(volume_context const &) -> volume_context& = delete;
 
-    auto watch(watch_options __opts = {}) -> __detail::__watch_sender;
+    auto watch(watch_options opts = {}) -> detail::watch_sender;
 
    private:
-    template <class _Rcvr>
-    friend struct __detail::__op;
-    template <class _Rcvr>
-    friend struct __detail::__next_receiver;
-    friend struct __detail::__watch_sender;
+    template <class Rcvr>
+    friend struct detail::op;
+    template <class Rcvr>
+    friend struct detail::next_receiver;
+    friend struct detail::watch_sender;
 
-    std::atomic<__detail::__op_base*> __active_{nullptr};
+    std::atomic<detail::op_base*> active_{nullptr};
   };
 
-  namespace __detail
+  namespace detail
   {
-    struct __op_base
+    struct op_base
     {
-      virtual ~__op_base() = default;
+      virtual ~op_base() = default;
     };
 
-    template <class _Rcvr>
-    struct __op;
+    template <class Rcvr>
+    struct op;
 
-    template <class _Rcvr>
-    struct __next_receiver
+    template <class Rcvr>
+    struct next_receiver
     {
       using receiver_concept = stdexec::receiver_tag;
 
-      __op<_Rcvr>* __self_;
+      op<Rcvr>* self_;
 
-      template <class... _Args>
-      void set_value(_Args&&...) noexcept;
+      template <class... Args>
+      void set_value(Args&&...) noexcept;
 
       void set_stopped() noexcept;
 
-      template <class _E>
-      void set_error(_E&&) noexcept;
+      template <class E>
+      void set_error(E&&) noexcept;
 
       [[nodiscard]]
-      auto get_env() const noexcept -> stdexec::env_of_t<_Rcvr>;
+      auto get_env() const noexcept -> stdexec::env_of_t<Rcvr>;
     };
 
-    inline auto __wcs_to_utf8_lower(LPCWSTR __w) -> std::optional<std::string>
+    inline auto wcs_to_utf8_lower(LPCWSTR w) -> std::optional<std::string>
     {
-      if (!__w)
+      if (!w)
         return std::nullopt;
-      int const __len = ::WideCharToMultiByte(CP_UTF8, 0, __w, -1, nullptr, 0, nullptr, nullptr);
-      if (__len <= 0)
+      int const len = ::WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+      if (len <= 0)
         return std::nullopt;
-      std::string __s(static_cast<std::size_t>(__len - 1), '\0');
-      if (::WideCharToMultiByte(CP_UTF8, 0, __w, -1, __s.data(), __len, nullptr, nullptr) <= 0)
+      std::string s(static_cast<std::size_t>(len - 1), '\0');
+      if (::WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), len, nullptr, nullptr) <= 0)
         return std::nullopt;
       // ASCII lowercase: \\?\Volume{guid} is pure ASCII.
-      for (auto& __c: __s)
-        __c = static_cast<char>(std::tolower(static_cast<unsigned char>(__c)));
-      return __s;
+      for (auto& c: s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      return s;
     }
 
-    // Inverse of __wcs_to_utf8_lower for the per-device CreateFileW path.
+    // Inverse of wcs_to_utf8_lower for the per-device CreateFileW path.
     // The volume path is pure ASCII so the conversion is essentially a
     // widening, but we route through MultiByteToWideChar to keep the
     // boundary handling consistent with the wcs_to_utf8 side.
-    inline auto __utf8_to_wcs(std::string const & __s) -> std::optional<std::wstring>
+    inline auto utf8_to_wcs(std::string const & s) -> std::optional<std::wstring>
     {
-      int const __wlen = ::MultiByteToWideChar(CP_UTF8, 0, __s.c_str(), -1, nullptr, 0);
-      if (__wlen <= 0)
+      int const wlen = ::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+      if (wlen <= 0)
         return std::nullopt;
-      std::wstring __w(static_cast<std::size_t>(__wlen - 1), L'\0');
-      if (::MultiByteToWideChar(CP_UTF8, 0, __s.c_str(), -1, __w.data(), __wlen) <= 0)
+      std::wstring w(static_cast<std::size_t>(wlen - 1), L'\0');
+      if (::MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), wlen) <= 0)
         return std::nullopt;
-      return __w;
+      return w;
     }
 
-    template <class _Rcvr>
-    struct __op : __op_base
+    template <class Rcvr>
+    struct op : op_base
     {
-      using __item_sender_t   = decltype(stdexec::just(std::declval<volume_event>()));
-      using __next_sender_t   = exec::next_sender_of_t<_Rcvr, __item_sender_t>;
-      using __next_receiver_t = __next_receiver<_Rcvr>;
-      using __next_op_t       = stdexec::connect_result_t<__next_sender_t, __next_receiver_t>;
+      using item_sender_t   = decltype(stdexec::just(std::declval<volume_event>()));
+      using next_sender_t   = exec::next_sender_of_t<Rcvr, item_sender_t>;
+      using next_receiver_t = next_receiver<Rcvr>;
+      using next_op_t       = stdexec::connect_result_t<next_sender_t, next_receiver_t>;
 
-      volume_context*     __ctx_;
-      watch_options       __opts_;
-      _Rcvr               __rcvr_;
-      TP_CALLBACK_ENVIRON __env_{};
-      HCMNOTIFICATION     __hnotify_{nullptr};
-      PTP_WORK            __drainer_work_{nullptr};
+      volume_context*     ctx_;
+      watch_options       opts_;
+      Rcvr               rcvr_;
+      TP_CALLBACK_ENVIRON env_{};
+      HCMNOTIFICATION     hnotify_{nullptr};
+      PTP_WORK            drainer_work_{nullptr};
 
       // Per-device handle registration. Populated only when
       // watch_options::watch_handle_events is true. Each entry owns one
       // open HANDLE to the volume + one HCMNOTIFICATION on the
       // CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE filter. Lives under
-      // __queue_mu_ so the interface-filter CM callback (arrival /
+      // queue_mu_ so the interface-filter CM callback (arrival /
       // removal) and the handle-filter CM callback (which looks up by
       // hNotify) cannot race on the map shape.
-      struct __device_reg
+      struct device_reg
       {
-        HANDLE          __handle{INVALID_HANDLE_VALUE};
-        HCMNOTIFICATION __notify{nullptr};
+        HANDLE          handle{INVALID_HANDLE_VALUE};
+        HCMNOTIFICATION notify{nullptr};
       };
 
       // MPSC queue (CM thread → pool drainer).
-      std::mutex                                    __queue_mu_;
-      std::deque<volume_event>                      __queue_;
-      std::unordered_set<std::string>               __seen_arrivals_;  // shares __queue_mu_
-      std::unordered_map<std::string, __device_reg> __device_regs_;    // shares __queue_mu_
-      std::atomic<bool>                             __drainer_running_{false};
+      std::mutex                                    queue_mu_;
+      std::deque<volume_event>                      queue_;
+      std::unordered_set<std::string>               seen_arrivals_;  // shares queue_mu_
+      std::unordered_map<std::string, device_reg> device_regs_;    // shares queue_mu_
+      std::atomic<bool>                             drainer_running_{false};
 
       // Per-delivery handshake (drainer ↔ next_receiver). Same shape as DA.
-      std::binary_semaphore __delivery_done_{0};
-      int                   __delivery_state_{0};  // 1=value, 2=stopped, 3=error
+      std::binary_semaphore delivery_done_{0};
+      int                   delivery_state_{0};  // 1=value, 2=stopped, 3=error
 
       // Termination state (used in Task 3 for cleanup work item).
-      std::atomic<bool>            __stop_requested_{false};
-      __finish_kind                __finish_kind_{__finish_none};
-      std::exception_ptr           __error_;
-      std::unique_ptr<__next_op_t> __next_op_;
+      std::atomic<bool>            stop_requested_{false};
+      finish_kind                finish_kind_{finish_none};
+      std::exception_ptr           error_;
+      std::unique_ptr<next_op_t> next_op_;
 
-      struct __on_stop_fn
+      struct on_stop_fn
       {
-        __op* __self_;
+        op* self_;
         void  operator()() noexcept
         {
-          __self_->__stop_requested_.store(true, std::memory_order_release);
-          __self_->__schedule_cleanup(__finish_stopped);
-          // The drainer will also observe __stop_requested_ on its next loop
+          self_->stop_requested_.store(true, std::memory_order_release);
+          self_->schedule_cleanup(finish_stopped);
+          // The drainer will also observe stop_requested_ on its next loop
           // iteration; if it is currently mid-delivery the in-flight set_next
           // chain shares the receiver's env (and thus its stop_token) and
           // will propagate stop, releasing the semaphore via
@@ -301,30 +301,30 @@ namespace velx
         }
       };
 
-      using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-      using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
+      using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+      using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
 
-      PTP_WORK                         __cleanup_work_{nullptr};
-      std::atomic<bool>                __cleanup_scheduled_{false};
-      std::optional<__stop_callback_t> __stop_cb_;
+      PTP_WORK                         cleanup_work_{nullptr};
+      std::atomic<bool>                cleanup_scheduled_{false};
+      std::optional<stop_callback_t> stop_cb_;
 
-      explicit __op(volume_context* __c, watch_options __o, _Rcvr __r)
-        : __ctx_{__c}
-        , __opts_{__o}
-        , __rcvr_{std::move(__r)}
+      explicit op(volume_context* c, watch_options o, Rcvr r)
+        : ctx_{c}
+        , opts_{o}
+        , rcvr_{std::move(r)}
       {
-        InitializeThreadpoolEnvironment(&__env_);
-        auto __sched = stdexec::get_scheduler(stdexec::get_env(__rcvr_));
-        SetThreadpoolCallbackPool(&__env_, __sched.native_handle());
+        InitializeThreadpoolEnvironment(&env_);
+        auto sched = stdexec::get_scheduler(stdexec::get_env(rcvr_));
+        SetThreadpoolCallbackPool(&env_, sched.native_handle());
       }
 
-      ~__op() override
+      ~op() override
       {
         // Resource cleanup is owned by this dtor (RDC pool pattern). Two
         // paths reach here:
-        //   (1) the cleanup work item already ran __teardown_and_complete,
+        //   (1) the cleanup work item already ran teardown_and_complete,
         //       which CM-unregistered + waited for the drainer + cleared
-        //       the active slot + completed the receiver. __hnotify_ is
+        //       the active slot + completed the receiver. hnotify_ is
         //       null; this dtor only closes the work items and destroys
         //       the env.
         //   (2) start() returned set_error before the cleanup work item
@@ -332,68 +332,68 @@ namespace velx
         //       register fail, enumeration fail). Whatever resources
         //       start() acquired before failing are still held; this
         //       dtor releases them.
-        if (__hnotify_)
+        if (hnotify_)
         {
-          CM_Unregister_Notification(__hnotify_);
+          CM_Unregister_Notification(hnotify_);
         }
         // Defensive: per-device handle registrations should already
         // have been torn down by the cleanup work item. Path (2) of
         // this dtor (start() failed before cleanup wired up) cannot
-        // have populated __device_regs_ because watch_handle_events
+        // have populated device_regs_ because watch_handle_events
         // only takes effect inside the drainer, which never ran. So
         // this clear is a no-op in path (1) and a no-op in path (2);
         // it exists purely to make the lifecycle invariant explicit.
-        __unregister_all_device_handles();
-        if (__drainer_work_)
+        unregister_all_device_handles();
+        if (drainer_work_)
         {
-          CloseThreadpoolWork(__drainer_work_);
+          CloseThreadpoolWork(drainer_work_);
         }
-        if (__cleanup_work_)
+        if (cleanup_work_)
         {
-          CloseThreadpoolWork(__cleanup_work_);
+          CloseThreadpoolWork(cleanup_work_);
         }
-        DestroyThreadpoolEnvironment(&__env_);
+        DestroyThreadpoolEnvironment(&env_);
       }
 
-      static auto CALLBACK __cm_callback(HCMNOTIFICATION,
-                                         PVOID                 __ctx_ptr,
-                                         CM_NOTIFY_ACTION      __action,
-                                         PCM_NOTIFY_EVENT_DATA __ev,
+      static auto CALLBACK cm_callback(HCMNOTIFICATION,
+                                         PVOID                 ctx_ptr,
+                                         CM_NOTIFY_ACTION      action,
+                                         PCM_NOTIFY_EVENT_DATA ev,
                                          DWORD) -> DWORD
       {
         // Filter check: we only want DEVINTERFACE arrivals/removals on
         // GUID_DEVINTERFACE_VOLUME. Anything else: ignore.
-        if (__ev->FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE)
+        if (ev->FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE)
           return ERROR_SUCCESS;
-        if (__action != CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL
-            && __action != CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL)
+        if (action != CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL
+            && action != CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL)
           return ERROR_SUCCESS;
-        if (!IsEqualGUID(__ev->u.DeviceInterface.ClassGuid, GUID_DEVINTERFACE_VOLUME))
+        if (!IsEqualGUID(ev->u.DeviceInterface.ClassGuid, GUID_DEVINTERFACE_VOLUME))
           return ERROR_SUCCESS;
 
-        auto __maybe_path = __wcs_to_utf8_lower(__ev->u.DeviceInterface.SymbolicLink);
-        if (!__maybe_path)
+        auto maybe_path = wcs_to_utf8_lower(ev->u.DeviceInterface.SymbolicLink);
+        if (!maybe_path)
         {
           // Conversion failed for this event — drop it, do not fail the
           // whole stream (matches reference's WARN_MSG-and-continue policy).
           return ERROR_SUCCESS;
         }
 
-        auto* __self = static_cast<__op*>(__ctx_ptr);
+        auto* self = static_cast<op*>(ctx_ptr);
 
-        volume_event __vev{
-          .kind        = (__action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
+        volume_event vev{
+          .kind        = (action == CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL)
                          ? volume_event_kind::interface_arrival
                          : volume_event_kind::interface_removal,
-          .device_path = std::move(*__maybe_path),
+          .device_path = std::move(*maybe_path),
         };
 
-        bool __submit = false;
+        bool submit = false;
         {
-          std::lock_guard __lk{__self->__queue_mu_};
-          if (__vev.kind == volume_event_kind::interface_arrival)
+          std::lock_guard lk{self->queue_mu_};
+          if (vev.kind == volume_event_kind::interface_arrival)
           {
-            if (!__self->__seen_arrivals_.insert(__vev.device_path).second)
+            if (!self->seen_arrivals_.insert(vev.device_path).second)
             {
               // Already known to us — drop. Closes the
               // register-vs-enumerate race; also harmless if CM ever
@@ -403,14 +403,14 @@ namespace velx
           }
           else
           {
-            __self->__seen_arrivals_.erase(__vev.device_path);
+            self->seen_arrivals_.erase(vev.device_path);
           }
-          __self->__queue_.push_back(std::move(__vev));
-          __submit = !__self->__drainer_running_.exchange(true, std::memory_order_acq_rel);
+          self->queue_.push_back(std::move(vev));
+          submit = !self->drainer_running_.exchange(true, std::memory_order_acq_rel);
         }
-        if (__submit)
+        if (submit)
         {
-          SubmitThreadpoolWork(__self->__drainer_work_);
+          SubmitThreadpoolWork(self->drainer_work_);
         }
         return ERROR_SUCCESS;
       }
@@ -428,38 +428,38 @@ namespace velx
       // interface-filter callback uses, so the consumer sees one
       // ordered event stream.
       //
-      // hNotify → device_path lookup is O(n) over __device_regs_ — n is
+      // hNotify → device_path lookup is O(n) over device_regs_ — n is
       // the number of currently-tracked volumes (typically a handful),
       // so this is fine. Mirrors the OrangeDrive reference's pattern.
-      static auto CALLBACK __handle_callback(HCMNOTIFICATION       __hnotify,
-                                             PVOID                 __ctx_ptr,
-                                             CM_NOTIFY_ACTION      __action,
-                                             PCM_NOTIFY_EVENT_DATA __ev,
+      static auto CALLBACK handle_callback(HCMNOTIFICATION       hnotify,
+                                             PVOID                 ctx_ptr,
+                                             CM_NOTIFY_ACTION      action,
+                                             PCM_NOTIFY_EVENT_DATA ev,
                                              DWORD) -> DWORD
       {
-        if (!__ev || __ev->FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE)
+        if (!ev || ev->FilterType != CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE)
           return ERROR_SUCCESS;
 
-        auto* __self = static_cast<__op*>(__ctx_ptr);
+        auto* self = static_cast<op*>(ctx_ptr);
 
         // Look up the device path from the hNotify handle. Hold the
         // queue mutex only across the lookup; if we're dispatching to
         // the user's predicate or pushing to the queue, those happen
         // outside the lookup lock so an unrelated CM thread isn't
         // blocked on us.
-        std::string __path;
+        std::string path;
         {
-          std::lock_guard __lk{__self->__queue_mu_};
-          for (auto const& [__p, __reg]: __self->__device_regs_)
+          std::lock_guard lk{self->queue_mu_};
+          for (auto const& [p, reg]: self->device_regs_)
           {
-            if (__reg.__notify == __hnotify)
+            if (reg.notify == hnotify)
             {
-              __path = __p;
+              path = p;
               break;
             }
           }
         }
-        if (__path.empty())
+        if (path.empty())
         {
           // The registration was already torn down (interface_removal
           // ran on the drainer just before this callback fired, or we
@@ -469,61 +469,61 @@ namespace velx
           return ERROR_SUCCESS;
         }
 
-        switch (__action)
+        switch (action)
         {
         case CM_NOTIFY_ACTION_DEVICEQUERYREMOVE:
         {
-          bool const __allow = approval::resolve_verdict<volume_info>(__self->__opts_.query_remove,
+          bool const allow = approval::resolve_verdict<volume_info>(self->opts_.query_remove,
                                                                       [&]
                                                                       {
-                                                                        return volume_info{__path};
+                                                                        return volume_info{path};
                                                                       });
-          return __allow ? ERROR_SUCCESS : ERROR_CANCELLED;
+          return allow ? ERROR_SUCCESS : ERROR_CANCELLED;
         }
         case CM_NOTIFY_ACTION_DEVICEQUERYREMOVEFAILED:
-          __self->__push_handle_event(
-            {.kind = volume_event_kind::handle_query_remove_failed, .device_path = __path});
+          self->push_handle_event(
+            {.kind = volume_event_kind::handle_query_remove_failed, .device_path = path});
           return ERROR_SUCCESS;
         case CM_NOTIFY_ACTION_DEVICEREMOVEPENDING:
-          __self->__push_handle_event(
-            {.kind = volume_event_kind::handle_remove_pending, .device_path = __path});
+          self->push_handle_event(
+            {.kind = volume_event_kind::handle_remove_pending, .device_path = path});
           return ERROR_SUCCESS;
         case CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE:
-          __self->__push_handle_event(
-            {.kind = volume_event_kind::handle_remove_complete, .device_path = __path});
+          self->push_handle_event(
+            {.kind = volume_event_kind::handle_remove_complete, .device_path = path});
           return ERROR_SUCCESS;
         case CM_NOTIFY_ACTION_DEVICECUSTOMEVENT:
-          __self->__push_handle_event({.kind        = volume_event_kind::handle_custom_event,
-                                       .device_path = __path,
-                                       .custom_guid = __ev->u.DeviceHandle.EventGuid});
+          self->push_handle_event({.kind        = volume_event_kind::handle_custom_event,
+                                       .device_path = path,
+                                       .custom_guid = ev->u.DeviceHandle.EventGuid});
           return ERROR_SUCCESS;
         default:
           return ERROR_SUCCESS;
         }
       }
 
-      static void CALLBACK __drainer_callback(PTP_CALLBACK_INSTANCE,
-                                              void* __ctx_ptr,
+      static void CALLBACK drainer_callback(PTP_CALLBACK_INSTANCE,
+                                              void* ctx_ptr,
                                               PTP_WORK) noexcept
       {
-        auto* __self = static_cast<__op*>(__ctx_ptr);
+        auto* self = static_cast<op*>(ctx_ptr);
         for (;;)
         {
-          volume_event __ev;
+          volume_event ev;
           {
-            std::lock_guard __lk{__self->__queue_mu_};
-            if (__self->__stop_requested_.load(std::memory_order_acquire))
+            std::lock_guard lk{self->queue_mu_};
+            if (self->stop_requested_.load(std::memory_order_acquire))
             {
-              __self->__drainer_running_.store(false, std::memory_order_release);
+              self->drainer_running_.store(false, std::memory_order_release);
               break;  // schedule_cleanup below
             }
-            if (__self->__queue_.empty())
+            if (self->queue_.empty())
             {
-              __self->__drainer_running_.store(false, std::memory_order_release);
+              self->drainer_running_.store(false, std::memory_order_release);
               return;  // idle exit; CM callback re-arms us
             }
-            __ev = std::move(__self->__queue_.front());
-            __self->__queue_.pop_front();
+            ev = std::move(self->queue_.front());
+            self->queue_.pop_front();
           }
 
           // Per-device handle registration is the drainer's job (not the
@@ -534,80 +534,80 @@ namespace velx
           // arrival event. Best-effort — failures are silently dropped
           // (consumer can try again on next arrival), matching the
           // reference's WARN-and-continue posture.
-          if (__self->__opts_.watch_handle_events)
+          if (self->opts_.watch_handle_events)
           {
-            if (__ev.kind == volume_event_kind::interface_arrival)
-              __self->__register_device_handle(__ev.device_path);
-            else if (__ev.kind == volume_event_kind::interface_removal)
-              __self->__unregister_device_handle(__ev.device_path);
+            if (ev.kind == volume_event_kind::interface_arrival)
+              self->register_device_handle(ev.device_path);
+            else if (ev.kind == volume_event_kind::interface_removal)
+              self->unregister_device_handle(ev.device_path);
           }
 
-          __self->__delivery_state_ = 0;
+          self->delivery_state_ = 0;
           try
           {
-            __self->__next_op_.reset(new __next_op_t(
-              stdexec::connect(exec::set_next(__self->__rcvr_, stdexec::just(std::move(__ev))),
-                               __next_receiver_t{__self})));
-            stdexec::start(*__self->__next_op_);
+            self->next_op_.reset(new next_op_t(
+              stdexec::connect(exec::set_next(self->rcvr_, stdexec::just(std::move(ev))),
+                               next_receiver_t{self})));
+            stdexec::start(*self->next_op_);
           }
           catch (...)
           {
-            __self->__error_          = std::current_exception();
-            __self->__delivery_state_ = 3;
-            __self->__delivery_done_.release();
+            self->error_          = std::current_exception();
+            self->delivery_state_ = 3;
+            self->delivery_done_.release();
           }
 
-          __self->__delivery_done_.acquire();
-          int const __state = __self->__delivery_state_;
-          __self->__next_op_.reset();
+          self->delivery_done_.acquire();
+          int const state = self->delivery_state_;
+          self->next_op_.reset();
 
-          if (__state == 2)
+          if (state == 2)
           {
-            __self->__schedule_cleanup(__finish_stopped);
+            self->schedule_cleanup(finish_stopped);
             return;
           }
-          if (__state == 3)
+          if (state == 3)
           {
-            __self->__schedule_cleanup(__finish_error);
+            self->schedule_cleanup(finish_error);
             return;
           }
         }
         // Reached only via the stop_requested branch above.
-        __self->__schedule_cleanup(__finish_stopped);
+        self->schedule_cleanup(finish_stopped);
       }
 
-      void __schedule_cleanup(__finish_kind __k) noexcept
+      void schedule_cleanup(finish_kind k) noexcept
       {
-        bool __expected = false;
-        if (!__cleanup_scheduled_.compare_exchange_strong(__expected,
+        bool expected = false;
+        if (!cleanup_scheduled_.compare_exchange_strong(expected,
                                                           true,
                                                           std::memory_order_acq_rel))
           return;
-        __finish_kind_ = __k;
-        SubmitThreadpoolWork(__cleanup_work_);
+        finish_kind_ = k;
+        SubmitThreadpoolWork(cleanup_work_);
       }
 
       // Push a non-arrival/removal event onto the queue (handle-filter
-      // callbacks). Mirrors the queue-push half of __cm_callback but
+      // callbacks). Mirrors the queue-push half of cm_callback but
       // skips the interface-arrival dedup path. Drops on stop_requested
       // so a late handle event after teardown doesn't grow the queue.
-      void __push_handle_event(volume_event __ev) noexcept
+      void push_handle_event(volume_event ev) noexcept
       {
-        bool __submit = false;
+        bool submit = false;
         {
-          std::lock_guard __lk{__queue_mu_};
-          if (__stop_requested_.load(std::memory_order_acquire))
+          std::lock_guard lk{queue_mu_};
+          if (stop_requested_.load(std::memory_order_acquire))
             return;
-          __queue_.push_back(std::move(__ev));
-          __submit = !__drainer_running_.exchange(true, std::memory_order_acq_rel);
+          queue_.push_back(std::move(ev));
+          submit = !drainer_running_.exchange(true, std::memory_order_acq_rel);
         }
-        if (__submit)
-          SubmitThreadpoolWork(__drainer_work_);
+        if (submit)
+          SubmitThreadpoolWork(drainer_work_);
       }
 
       // Open a per-volume HANDLE and register a DEVICEHANDLE-filter
       // CM notification against it. Returns true on success (the entry
-      // is now in __device_regs_), false on any failure (caller logs +
+      // is now in device_regs_), false on any failure (caller logs +
       // continues; mirrors the WARN-and-continue posture of the
       // OrangeDrive reference).
       //
@@ -616,51 +616,51 @@ namespace velx
       // else on the system. We only need a kernel handle to use as the
       // CM filter target, not actual data access.
       //
-      // Must NOT be called while holding __queue_mu_ —
+      // Must NOT be called while holding queue_mu_ —
       // CM_Register_Notification can block, and we don't want to
       // serialize that against the queue.
-      auto __register_device_handle(std::string const & __path) noexcept -> bool
+      auto register_device_handle(std::string const & path) noexcept -> bool
       {
-        if (!__opts_.watch_handle_events)
+        if (!opts_.watch_handle_events)
           return false;
 
-        auto __wpath = __utf8_to_wcs(__path);
-        if (!__wpath)
+        auto wpath = utf8_to_wcs(path);
+        if (!wpath)
           return false;
 
-        HANDLE __h = ::CreateFileW(__wpath->c_str(),
+        HANDLE h = ::CreateFileW(wpath->c_str(),
                                    GENERIC_READ,
                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                                    nullptr,
                                    OPEN_EXISTING,
                                    FILE_ATTRIBUTE_NORMAL,
                                    nullptr);
-        if (__h == INVALID_HANDLE_VALUE)
+        if (h == INVALID_HANDLE_VALUE)
           return false;
 
-        CM_NOTIFY_FILTER __filter{};
-        __filter.cbSize                 = sizeof(__filter);
-        __filter.FilterType             = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
-        __filter.u.DeviceHandle.hTarget = __h;
+        CM_NOTIFY_FILTER filter{};
+        filter.cbSize                 = sizeof(filter);
+        filter.FilterType             = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE;
+        filter.u.DeviceHandle.hTarget = h;
 
-        HCMNOTIFICATION __n = nullptr;
-        if (CONFIGRET const __cr =
-              CM_Register_Notification(&__filter, this, &__handle_callback, &__n);
-            __cr != CR_SUCCESS)
+        HCMNOTIFICATION n = nullptr;
+        if (CONFIGRET const cr =
+              CM_Register_Notification(&filter, this, &handle_callback, &n);
+            cr != CR_SUCCESS)
         {
-          CloseHandle(__h);
+          CloseHandle(h);
           return false;
         }
 
         // The fresh hNotify cannot have any in-flight callback yet, so
         // CM_Unregister_Notification on the duplicate-key path below is
         // safe to call under the lock.
-        std::lock_guard __lk{__queue_mu_};
-        auto [__it, __inserted] = __device_regs_.try_emplace(__path, __device_reg{__h, __n});
-        if (!__inserted)
+        std::lock_guard lk{queue_mu_};
+        auto [it, inserted] = device_regs_.try_emplace(path, device_reg{h, n});
+        if (!inserted)
         {
-          CM_Unregister_Notification(__n);
-          CloseHandle(__h);
+          CM_Unregister_Notification(n);
+          CloseHandle(h);
           return false;
         }
         return true;
@@ -670,61 +670,61 @@ namespace velx
       // the entry under the lock then releases it before calling
       // CM_Unregister_Notification — that call blocks until any
       // in-flight handle callback returns, and an in-flight callback
-      // tries to take __queue_mu_, so we must NOT hold it across the
+      // tries to take queue_mu_, so we must NOT hold it across the
       // unregister.
-      void __unregister_device_handle(std::string const & __path) noexcept
+      void unregister_device_handle(std::string const & path) noexcept
       {
-        __device_reg __reg{};
+        device_reg reg{};
         {
-          std::lock_guard __lk{__queue_mu_};
-          auto            __it = __device_regs_.find(__path);
-          if (__it == __device_regs_.end())
+          std::lock_guard lk{queue_mu_};
+          auto            it = device_regs_.find(path);
+          if (it == device_regs_.end())
             return;
-          __reg = __it->second;
-          __device_regs_.erase(__it);
+          reg = it->second;
+          device_regs_.erase(it);
         }
-        if (__reg.__notify)
-          CM_Unregister_Notification(__reg.__notify);
-        if (__reg.__handle != INVALID_HANDLE_VALUE)
-          CloseHandle(__reg.__handle);
+        if (reg.notify)
+          CM_Unregister_Notification(reg.notify);
+        if (reg.handle != INVALID_HANDLE_VALUE)
+          CloseHandle(reg.handle);
       }
 
       // Drop ALL per-device registrations. Same locking discipline as
-      // __unregister_device_handle: extract the snapshot under the
+      // unregister_device_handle: extract the snapshot under the
       // lock, release, then unregister + close. Used by the cleanup
       // work item.
-      void __unregister_all_device_handles() noexcept
+      void unregister_all_device_handles() noexcept
       {
-        std::vector<__device_reg> __regs;
+        std::vector<device_reg> regs;
         {
-          std::lock_guard __lk{__queue_mu_};
-          __regs.reserve(__device_regs_.size());
-          for (auto& [__p, __r]: __device_regs_)
-            __regs.push_back(__r);
-          __device_regs_.clear();
+          std::lock_guard lk{queue_mu_};
+          regs.reserve(device_regs_.size());
+          for (auto& [p, r]: device_regs_)
+            regs.push_back(r);
+          device_regs_.clear();
         }
-        for (auto& __r: __regs)
+        for (auto& r: regs)
         {
-          if (__r.__notify)
-            CM_Unregister_Notification(__r.__notify);
-          if (__r.__handle != INVALID_HANDLE_VALUE)
-            CloseHandle(__r.__handle);
+          if (r.notify)
+            CM_Unregister_Notification(r.notify);
+          if (r.handle != INVALID_HANDLE_VALUE)
+            CloseHandle(r.handle);
         }
       }
 
-      static void CALLBACK __cleanup_callback(PTP_CALLBACK_INSTANCE,
-                                              void* __ctx_ptr,
+      static void CALLBACK cleanup_callback(PTP_CALLBACK_INSTANCE,
+                                              void* ctx_ptr,
                                               PTP_WORK) noexcept
       {
-        auto* __self = static_cast<__op*>(__ctx_ptr);
-        __self->__teardown_and_complete();
+        auto* self = static_cast<op*>(ctx_ptr);
+        self->teardown_and_complete();
       }
 
-      void __teardown_and_complete() noexcept
+      void teardown_and_complete() noexcept
       {
         // (a) Drop the stop callback first so a late stop request cannot
         // re-enter teardown while we are mid-cleanup.
-        __stop_cb_.reset();
+        stop_cb_.reset();
 
         // (b) Unregister the interface-filter CM notification first,
         // so no new arrivals/removals can land while we tear down the
@@ -734,10 +734,10 @@ namespace velx
         // from inside a CM callback" is satisfied. The OrangeDrive
         // reference needed a dedicated abandoned-thread for this; the
         // cleanup work item plays that role here.
-        if (__hnotify_)
+        if (hnotify_)
         {
-          CM_Unregister_Notification(__hnotify_);
-          __hnotify_ = nullptr;
+          CM_Unregister_Notification(hnotify_);
+          hnotify_ = nullptr;
         }
 
         // (b2) Drop every per-device DEVICEHANDLE registration that
@@ -745,75 +745,75 @@ namespace velx
         // until any in-flight handle callback for that hNotify
         // returns, so after this point no handle_* events can fire.
         // Closes the open volume handles too.
-        __unregister_all_device_handles();
+        unregister_all_device_handles();
 
         // (c) Wait for the drainer to drain. The drainer observes
-        // __stop_requested_ on its next loop iteration and returns; if it
+        // stop_requested_ on its next loop iteration and returns; if it
         // was idle the wait is a no-op. Calling
         // WaitForThreadpoolWorkCallbacks on a *different* PTP_WORK from
         // inside another PTP_WORK callback is documented-safe.
-        if (__drainer_work_)
+        if (drainer_work_)
         {
-          WaitForThreadpoolWorkCallbacks(__drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
+          WaitForThreadpoolWorkCallbacks(drainer_work_, /*fCancelPendingCallbacks*/ FALSE);
         }
 
-        // (d) Drainer should have reset __next_op_ on every iteration; this
+        // (d) Drainer should have reset next_op_ on every iteration; this
         // is defensive in case the drainer exited via the stop_requested
         // branch without delivering.
-        __next_op_.reset();
+        next_op_.reset();
 
         // (e) Release the active slot.
-        __ctx_->__active_.store(nullptr, std::memory_order_release);
+        ctx_->active_.store(nullptr, std::memory_order_release);
 
         // (f) Move-out then complete. The receiver's set_stopped/set_error
         // may destroy *this* synchronously, so do not touch members afterwards.
-        auto                __local_rcvr = static_cast<_Rcvr&&>(__rcvr_);
-        auto                __ep         = std::move(__error_);
-        __finish_kind const __kind       = __finish_kind_;
+        auto                local_rcvr = static_cast<Rcvr&&>(rcvr_);
+        auto                ep         = std::move(error_);
+        finish_kind const kind       = finish_kind_;
 
-        if (__kind == __finish_error)
+        if (kind == finish_error)
         {
-          stdexec::set_error(std::move(__local_rcvr), std::move(__ep));
+          stdexec::set_error(std::move(local_rcvr), std::move(ep));
         }
         else
         {
-          stdexec::set_stopped(std::move(__local_rcvr));
+          stdexec::set_stopped(std::move(local_rcvr));
         }
       }
 
       void start() & noexcept
       {
         // 1. CAS active slot.
-        __op_base* __expected = nullptr;
-        if (!__ctx_->__active_.compare_exchange_strong(__expected, this))
+        op_base* expected = nullptr;
+        if (!ctx_->active_.compare_exchange_strong(expected, this))
         {
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"volume_context already "
                                                                         "has an active watch"}));
           return;
         }
 
         // 2. Drainer work item.
-        __drainer_work_ = CreateThreadpoolWork(&__drainer_callback, this, &__env_);
-        if (!__drainer_work_)
+        drainer_work_ = CreateThreadpoolWork(&drainer_callback, this, &env_);
+        if (!drainer_work_)
         {
-          DWORD const __e = GetLastError();
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+          DWORD const e = GetLastError();
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(e),
                                                                        std::system_category(),
                                                                        "CreateThreadpoolWork"}));
           return;
         }
 
         // 2b. Cleanup work item.
-        __cleanup_work_ = CreateThreadpoolWork(&__cleanup_callback, this, &__env_);
-        if (!__cleanup_work_)
+        cleanup_work_ = CreateThreadpoolWork(&cleanup_callback, this, &env_);
+        if (!cleanup_work_)
         {
-          DWORD const __e = GetLastError();
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
-                             std::make_exception_ptr(std::system_error{static_cast<int>(__e),
+          DWORD const e = GetLastError();
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
+                             std::make_exception_ptr(std::system_error{static_cast<int>(e),
                                                                        std::system_category(),
                                                                        "CreateThreadpoolWork "
                                                                        "(cleanup)"}));
@@ -821,19 +821,19 @@ namespace velx
         }
 
         // 3. Register CM notification.
-        CM_NOTIFY_FILTER __filter{};
-        __filter.cbSize                      = sizeof(__filter);
-        __filter.FilterType                  = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
-        __filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_VOLUME;
-        if (CONFIGRET const __cr =
-              CM_Register_Notification(&__filter, this, &__cm_callback, &__hnotify_);
-            __cr != CR_SUCCESS)
+        CM_NOTIFY_FILTER filter{};
+        filter.cbSize                      = sizeof(filter);
+        filter.FilterType                  = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
+        filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_VOLUME;
+        if (CONFIGRET const cr =
+              CM_Register_Notification(&filter, this, &cm_callback, &hnotify_);
+            cr != CR_SUCCESS)
         {
-          __ctx_->__active_.store(nullptr, std::memory_order_release);
-          stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+          ctx_->active_.store(nullptr, std::memory_order_release);
+          stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                              std::make_exception_ptr(std::runtime_error{"CM_Register_Notification "
                                                                         "failed (CR_"
-                                                                        + std::to_string(__cr)
+                                                                        + std::to_string(cr)
                                                                         + ")"}));
           return;
         }
@@ -841,50 +841,50 @@ namespace velx
         // Initial replay: enumerate volumes that are already present and
         // synthesize arrival events for them. Dedupes against any CM
         // arrival that fired between CM register and this enumeration via
-        // __seen_arrivals_ — see design doc Section 5.
+        // seen_arrivals_ — see design doc Section 5.
         for (;;)
         {
-          ULONG __size = 0;
-          if (CONFIGRET const __cr =
-                CM_Get_Device_Interface_List_SizeA(&__size,
+          ULONG size = 0;
+          if (CONFIGRET const cr =
+                CM_Get_Device_Interface_List_SizeA(&size,
                                                    const_cast<GUID*>(&GUID_DEVINTERFACE_VOLUME),
                                                    nullptr,
                                                    CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
-              __cr != CR_SUCCESS)
+              cr != CR_SUCCESS)
           {
             // Treat enumeration failure as fatal in start(): roll back.
             // Resource cleanup (CM_Unregister, work items, env) is owned
-            // by ~__op; just clear active and propagate the error.
-            __ctx_->__active_.store(nullptr, std::memory_order_release);
-            stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+            // by ~op; just clear active and propagate the error.
+            ctx_->active_.store(nullptr, std::memory_order_release);
+            stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                                std::make_exception_ptr(std::runtime_error{"CM_Get_Device_Interface_"
                                                                           "List_SizeA failed (CR_"
-                                                                          + std::to_string(__cr)
+                                                                          + std::to_string(cr)
                                                                           + ")"}));
             return;
           }
-          std::vector<char> __buf(__size);
-          GUID              __guid = GUID_DEVINTERFACE_VOLUME;
-          if (CONFIGRET const __cr =
-                CM_Get_Device_Interface_ListA(&__guid,
+          std::vector<char> buf(size);
+          GUID              guid = GUID_DEVINTERFACE_VOLUME;
+          if (CONFIGRET const cr =
+                CM_Get_Device_Interface_ListA(&guid,
                                               nullptr,
-                                              __buf.data(),
-                                              __size,
+                                              buf.data(),
+                                              size,
                                               CM_GET_DEVICE_INTERFACE_LIST_PRESENT);
-              __cr == CR_BUFFER_SMALL)
+              cr == CR_BUFFER_SMALL)
           {
             // List grew between size and fetch — retry with the new size.
             continue;
           }
-          else if (__cr != CR_SUCCESS)
+          else if (cr != CR_SUCCESS)
           {
             // Resource cleanup (CM_Unregister, work items, env) is owned
-            // by ~__op; just clear active and propagate the error.
-            __ctx_->__active_.store(nullptr, std::memory_order_release);
-            stdexec::set_error(static_cast<_Rcvr&&>(__rcvr_),
+            // by ~op; just clear active and propagate the error.
+            ctx_->active_.store(nullptr, std::memory_order_release);
+            stdexec::set_error(static_cast<Rcvr&&>(rcvr_),
                                std::make_exception_ptr(std::runtime_error{"CM_Get_Device_Interface_"
                                                                           "ListA failed (CR_"
-                                                                          + std::to_string(__cr)
+                                                                          + std::to_string(cr)
                                                                           + ")"}));
             return;
           }
@@ -892,30 +892,30 @@ namespace velx
           // Multi-string: NUL-separated, double-NUL terminated. Lock the
           // queue mutex once for the whole batch so the CM callback can't
           // interleave dedup decisions mid-enumeration.
-          bool __submit = false;
+          bool submit = false;
           {
-            std::lock_guard __lk{__queue_mu_};
-            char const *    __p   = __buf.data();
-            char const *    __end = __buf.data() + __size;
-            while (__p < __end && *__p)
+            std::lock_guard lk{queue_mu_};
+            char const *    p   = buf.data();
+            char const *    end = buf.data() + size;
+            while (p < end && *p)
             {
-              std::size_t const __n = std::strlen(__p);
-              std::string       __path(__p, __n);
-              for (auto& __c: __path)
-                __c = static_cast<char>(std::tolower(static_cast<unsigned char>(__c)));
-              if (__seen_arrivals_.insert(__path).second)
+              std::size_t const n = std::strlen(p);
+              std::string       path(p, n);
+              for (auto& c: path)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+              if (seen_arrivals_.insert(path).second)
               {
-                __queue_.push_back({volume_event_kind::interface_arrival, std::move(__path)});
+                queue_.push_back({volume_event_kind::interface_arrival, std::move(path)});
               }
-              __p += __n + 1;
+              p += n + 1;
             }
             // Mark drainer_running_ true while still under the lock so a
             // CM callback firing concurrently does not double-submit.
-            __submit = !__drainer_running_.exchange(true, std::memory_order_acq_rel);
+            submit = !drainer_running_.exchange(true, std::memory_order_acq_rel);
           }
-          if (__submit)
+          if (submit)
           {
-            SubmitThreadpoolWork(__drainer_work_);
+            SubmitThreadpoolWork(drainer_work_);
           }
           break;
         }
@@ -925,48 +925,48 @@ namespace velx
         // (CM notification, work items, queue, drainer) is fully up. This
         // ordering is required for cleanup's WaitForThreadpoolWorkCallbacks
         // to be well-defined — see design doc Section 7.
-        __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)), __on_stop_fn{this});
+        stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)), on_stop_fn{this});
       }
     };
 
-    template <class _Rcvr>
-    template <class... _Args>
-    void __next_receiver<_Rcvr>::set_value(_Args&&...) noexcept
+    template <class Rcvr>
+    template <class... Args>
+    void next_receiver<Rcvr>::set_value(Args&&...) noexcept
     {
-      __self_->__delivery_state_ = 1;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 1;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    void __next_receiver<_Rcvr>::set_stopped() noexcept
+    template <class Rcvr>
+    void next_receiver<Rcvr>::set_stopped() noexcept
     {
-      __self_->__delivery_state_ = 2;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 2;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    template <class _E>
-    void __next_receiver<_Rcvr>::set_error(_E&& __e) noexcept
+    template <class Rcvr>
+    template <class E>
+    void next_receiver<Rcvr>::set_error(E&& e) noexcept
     {
-      if constexpr (std::is_same_v<std::decay_t<_E>, std::exception_ptr>)
+      if constexpr (std::is_same_v<std::decay_t<E>, std::exception_ptr>)
       {
-        __self_->__error_ = std::forward<_E>(__e);
+        self_->error_ = std::forward<E>(e);
       }
       else
       {
-        __self_->__error_ = std::make_exception_ptr(std::forward<_E>(__e));
+        self_->error_ = std::make_exception_ptr(std::forward<E>(e));
       }
-      __self_->__delivery_state_ = 3;
-      __self_->__delivery_done_.release();
+      self_->delivery_state_ = 3;
+      self_->delivery_done_.release();
     }
 
-    template <class _Rcvr>
-    auto __next_receiver<_Rcvr>::get_env() const noexcept -> stdexec::env_of_t<_Rcvr>
+    template <class Rcvr>
+    auto next_receiver<Rcvr>::get_env() const noexcept -> stdexec::env_of_t<Rcvr>
     {
-      return stdexec::get_env(__self_->__rcvr_);
+      return stdexec::get_env(self_->rcvr_);
     }
 
-    struct __watch_sender
+    struct watch_sender
     {
       using sender_concept = exec::sequence_sender_tag;
       using completion_signatures =
@@ -974,24 +974,24 @@ namespace velx
                                        stdexec::set_stopped_t(),
                                        stdexec::set_error_t(std::exception_ptr)>;
 
-      using __item_sender_t = decltype(stdexec::just(std::declval<volume_event>()));
-      using item_types      = exec::item_types<__item_sender_t>;
+      using item_sender_t = decltype(stdexec::just(std::declval<volume_event>()));
+      using item_types      = exec::item_types<item_sender_t>;
 
-      volume_context* __ctx_;
-      watch_options   __opts_;
+      volume_context* ctx_;
+      watch_options   opts_;
 
-      template <stdexec::receiver _Rcvr>
-        requires exec::__env_has_scheduler<stdexec::env_of_t<_Rcvr>,
+      template <stdexec::receiver Rcvr>
+        requires exec::__env_has_scheduler<stdexec::env_of_t<Rcvr>,
                                            exec::windows_thread_pool::scheduler>
-      auto subscribe(_Rcvr __rcvr) const -> __op<_Rcvr>
+      auto subscribe(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ctx_, __opts_, std::move(__rcvr)};
+        return op<Rcvr>{ctx_, opts_, std::move(rcvr)};
       }
     };
-  }  // namespace __detail
+  }  // namespace detail
 
-  inline auto volume_context::watch(watch_options __opts) -> __detail::__watch_sender
+  inline auto volume_context::watch(watch_options opts) -> detail::watch_sender
   {
-    return {this, __opts};
+    return {this, opts};
   }
 }  // namespace velx

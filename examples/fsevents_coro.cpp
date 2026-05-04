@@ -45,136 +45,136 @@
 
 namespace fsxchan
 {
-  template <class _T>
+  template <class T>
   class chan
   {
    public:
-    void push(_T __v)
+    void push(T v)
     {
-      std::unique_lock __lk{__m_};
-      __push_cv_.wait(__lk, [&] { return !__slot_.has_value() || __closed_; });
-      if (__closed_)
+      std::unique_lock lk{m_};
+      push_cv_.wait(lk, [&] { return !slot_.has_value() || closed_; });
+      if (closed_)
         return;
-      if (__waiter_)
+      if (waiter_)
       {
-        auto* __w = std::exchange(__waiter_, nullptr);
-        __lk.unlock();
-        __w->__deliver(std::optional<_T>{std::move(__v)});
+        auto* w = std::exchange(waiter_, nullptr);
+        lk.unlock();
+        w->deliver(std::optional<T>{std::move(v)});
         return;
       }
-      __slot_.emplace(std::move(__v));
+      slot_.emplace(std::move(v));
     }
 
     void close()
     {
-      __waiter_base* __w = nullptr;
+      waiter_base* w = nullptr;
       {
-        std::lock_guard __lk{__m_};
-        __closed_ = true;
-        __push_cv_.notify_all();
-        __w = std::exchange(__waiter_, nullptr);
+        std::lock_guard lk{m_};
+        closed_ = true;
+        push_cv_.notify_all();
+        w = std::exchange(waiter_, nullptr);
       }
-      if (__w)
-        __w->__deliver(std::nullopt);
+      if (w)
+        w->deliver(std::nullopt);
     }
 
-    struct __pop_sender;
-    auto pop() -> __pop_sender
+    struct pop_sender;
+    auto pop() -> pop_sender
     {
       return {this};
     }
 
    private:
-    struct __waiter_base
+    struct waiter_base
     {
-      virtual void __deliver(std::optional<_T>) noexcept = 0;
+      virtual void deliver(std::optional<T>) noexcept = 0;
     };
 
-    std::mutex              __m_;
-    std::condition_variable __push_cv_;
-    std::optional<_T>       __slot_;
-    bool                    __closed_{false};
-    __waiter_base*          __waiter_{nullptr};
+    std::mutex              m_;
+    std::condition_variable push_cv_;
+    std::optional<T>       slot_;
+    bool                    closed_{false};
+    waiter_base*          waiter_{nullptr};
 
    public:
-    struct __pop_sender
+    struct pop_sender
     {
       using sender_concept = stdexec::sender_t;
       using completion_signatures =
-        stdexec::completion_signatures<stdexec::set_value_t(std::optional<_T>),
+        stdexec::completion_signatures<stdexec::set_value_t(std::optional<T>),
                                        stdexec::set_stopped_t()>;
 
-      chan* __ch_;
+      chan* ch_;
 
-      template <class _Rcvr>
-      struct __op : __waiter_base
+      template <class Rcvr>
+      struct op : waiter_base
       {
-        chan* __ch_;
-        _Rcvr __rcvr_;
+        chan* ch_;
+        Rcvr rcvr_;
 
-        explicit __op(chan* __ch, _Rcvr __r)
-          : __ch_{__ch}
-          , __rcvr_{std::move(__r)}
+        explicit op(chan* ch, Rcvr r)
+          : ch_{ch}
+          , rcvr_{std::move(r)}
         {}
 
-        struct __on_stop_fn
+        struct on_stop_fn
         {
-          __op* __self_;
+          op* self_;
           void  operator()() noexcept
           {
-            bool __was_waiter = false;
+            bool was_waiter = false;
             {
-              std::lock_guard __lk{__self_->__ch_->__m_};
-              if (__self_->__ch_->__waiter_ == __self_)
+              std::lock_guard lk{self_->ch_->m_};
+              if (self_->ch_->waiter_ == self_)
               {
-                __self_->__ch_->__waiter_ = nullptr;
-                __was_waiter              = true;
+                self_->ch_->waiter_ = nullptr;
+                was_waiter              = true;
               }
             }
-            if (__was_waiter)
-              stdexec::set_stopped(static_cast<_Rcvr&&>(__self_->__rcvr_));
+            if (was_waiter)
+              stdexec::set_stopped(static_cast<Rcvr&&>(self_->rcvr_));
           }
         };
 
-        using __stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<_Rcvr>>;
-        using __stop_callback_t = stdexec::stop_callback_for_t<__stop_token_t, __on_stop_fn>;
-        std::optional<__stop_callback_t> __stop_cb_;
+        using stop_token_t    = stdexec::stop_token_of_t<stdexec::env_of_t<Rcvr>>;
+        using stop_callback_t = stdexec::stop_callback_for_t<stop_token_t, on_stop_fn>;
+        std::optional<stop_callback_t> stop_cb_;
 
         void start() & noexcept
         {
-          std::unique_lock __lk{__ch_->__m_};
-          if (__ch_->__slot_)
+          std::unique_lock lk{ch_->m_};
+          if (ch_->slot_)
           {
-            auto __v = std::move(*__ch_->__slot_);
-            __ch_->__slot_.reset();
-            __ch_->__push_cv_.notify_one();
-            __lk.unlock();
-            stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_), std::optional<_T>{std::move(__v)});
+            auto v = std::move(*ch_->slot_);
+            ch_->slot_.reset();
+            ch_->push_cv_.notify_one();
+            lk.unlock();
+            stdexec::set_value(static_cast<Rcvr&&>(rcvr_), std::optional<T>{std::move(v)});
             return;
           }
-          if (__ch_->__closed_)
+          if (ch_->closed_)
           {
-            __lk.unlock();
-            stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_), std::optional<_T>{});
+            lk.unlock();
+            stdexec::set_value(static_cast<Rcvr&&>(rcvr_), std::optional<T>{});
             return;
           }
-          __ch_->__waiter_ = this;
-          __lk.unlock();
-          __stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(__rcvr_)),
-                             __on_stop_fn{this});
+          ch_->waiter_ = this;
+          lk.unlock();
+          stop_cb_.emplace(stdexec::get_stop_token(stdexec::get_env(rcvr_)),
+                             on_stop_fn{this});
         }
 
-        void __deliver(std::optional<_T> __v) noexcept override
+        void deliver(std::optional<T> v) noexcept override
         {
-          __stop_cb_.reset();
-          stdexec::set_value(static_cast<_Rcvr&&>(__rcvr_), std::move(__v));
+          stop_cb_.reset();
+          stdexec::set_value(static_cast<Rcvr&&>(rcvr_), std::move(v));
         }
       };
 
-      template <stdexec::receiver _Rcvr>
-      auto connect(_Rcvr __rcvr) const -> __op<_Rcvr>
+      template <stdexec::receiver Rcvr>
+      auto connect(Rcvr rcvr) const -> op<Rcvr>
       {
-        return __op<_Rcvr>{__ch_, std::move(__rcvr)};
+        return op<Rcvr>{ch_, std::move(rcvr)};
       }
     };
   };
@@ -197,35 +197,35 @@ struct fs_batch_owned
 // Coroutine consumer: pulls batches one at a time from the channel.
 // ---------------------------------------------------------------------------
 
-auto consume(fsxchan::chan<fs_batch_owned>& __ch) -> exec::task<int>
+auto consume(fsxchan::chan<fs_batch_owned>& ch) -> exec::task<int>
 {
-  int __count = 0;
-  while (auto __maybe = co_await __ch.pop())
+  int count = 0;
+  while (auto maybe = co_await ch.pop())
   {
-    auto const & __b = *__maybe;
-    if (__b.must_rescan)
+    auto const & b = *maybe;
+    if (b.must_rescan)
       std::printf("[coro] rescan requested\n");
-    for (auto const & __e: __b.events)
+    for (auto const & e: b.events)
     {
-      if (fsx::is_drop_notice(__e))
+      if (fsx::is_drop_notice(e))
       {
         std::printf("[coro] drop notice flags=%#x path=%s\n",
-                    static_cast<unsigned>(__e.flags),
-                    __e.path.c_str());
+                    static_cast<unsigned>(e.flags),
+                    e.path.c_str());
         continue;
       }
       std::printf("[coro] id=%llu flags=%#x path=%s\n",
-                  static_cast<unsigned long long>(__e.id),
-                  static_cast<unsigned>(__e.flags),
-                  __e.path.c_str());
+                  static_cast<unsigned long long>(e.id),
+                  static_cast<unsigned>(e.flags),
+                  e.path.c_str());
     }
     std::printf("[coro] batch consumed last_id=%llu (#%d)\n",
-                static_cast<unsigned long long>(__b.last_id),
-                __count);
-    ++__count;
+                static_cast<unsigned long long>(b.last_id),
+                count);
+    ++count;
   }
-  std::printf("[coro] channel closed, total batches = %d\n", __count);
-  co_return __count;
+  std::printf("[coro] channel closed, total batches = %d\n", count);
+  co_return count;
 }
 
 namespace fs = std::filesystem;
@@ -234,77 +234,77 @@ using namespace std::chrono_literals;
 auto main() -> int
 {
   std::setvbuf(stdout, nullptr, _IOLBF, 0);
-  auto __dir = fs::temp_directory_path() / "fsx_demo_coro";
-  fs::create_directories(__dir);
-  for (auto const & __e: fs::directory_iterator{__dir})
-    fs::remove_all(__e.path());
-  __dir = fs::canonical(__dir);
-  std::printf("watching %s\n", __dir.c_str());
+  auto dir = fs::temp_directory_path() / "fsx_demo_coro";
+  fs::create_directories(dir);
+  for (auto const & e: fs::directory_iterator{dir})
+    fs::remove_all(e.path());
+  dir = fs::canonical(dir);
+  std::printf("watching %s\n", dir.c_str());
 
-  fsx::fsevents_context         __ctx{{__dir.string()}};
-  fsxchan::chan<fs_batch_owned> __ch;
+  fsx::fsevents_context         ctx{{dir.string()}};
+  fsxchan::chan<fs_batch_owned> ch;
 
-  std::atomic<bool> __mutator_stop{false};
-  std::thread       __mutator{[&]
+  std::atomic<bool> mutator_stop{false};
+  std::thread       mutator{[&]
                         {
-                          for (int __i = 0; !__mutator_stop.load() && __i < 5; ++__i)
+                          for (int i = 0; !mutator_stop.load() && i < 5; ++i)
                           {
                             std::this_thread::sleep_for(400ms);
-                            std::ofstream __f{__dir / ("file_" + std::to_string(__i) + ".txt")};
-                            __f << "hello " << __i << "\n";
+                            std::ofstream f{dir / ("file_" + std::to_string(i) + ".txt")};
+                            f << "hello " << i << "\n";
                           }
                         }};
 
-  exec::static_thread_pool __pool{2};
-  auto                     __sched    = __pool.get_scheduler();
-  exec::libdispatch_queue  __fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.coro."
+  exec::static_thread_pool pool{2};
+  auto                     sched    = pool.get_scheduler();
+  exec::libdispatch_queue  fsx_pool = exec::libdispatch_queue::make_concurrent("fsx.coro."
                                                                                  "producer");
 
   // Run the producer on a worker thread (its push() blocks the dispatch queue
   // for backpressure), and consume() in the foreground. A 3s timer cancels
   // both via stop_token, then close() releases any blocked push.
-  std::atomic<bool> __producer_done{false};
-  std::thread       __producer_thread{
+  std::atomic<bool> producer_done{false};
+  std::thread       producer_thread{
     [&]
     {
-      auto __pipeline = exec::sequence_with_scheduler(__fsx_pool.get_scheduler(), __ctx.watch())
+      auto pipeline = exec::sequence_with_scheduler(fsx_pool.get_scheduler(), ctx.watch())
                       | exec::transform_each(stdexec::then(
-                        [&](fsx::fs_batch __b)
+                        [&](fsx::fs_batch b)
                         {
                           std::printf("[prod] pushing batch last_id=%llu (%zu events)\n",
-                                      static_cast<unsigned long long>(__b.last_id),
-                                      __b.events.size());
-                          __ch.push(fs_batch_owned{
-                                  {__b.events.begin(), __b.events.end()},
-                            __b.last_id,
-                            __b.had_drops,
-                            __b.must_rescan
+                                      static_cast<unsigned long long>(b.last_id),
+                                      b.events.size());
+                          ch.push(fs_batch_owned{
+                                  {b.events.begin(), b.events.end()},
+                            b.last_id,
+                            b.had_drops,
+                            b.must_rescan
                           });
                         }))
                       | exec::ignore_all_values();
-      stdexec::sync_wait(exec::when_any(stdexec::starts_on(__sched, stdexec::just())
+      stdexec::sync_wait(exec::when_any(stdexec::starts_on(sched, stdexec::just())
                                           | stdexec::then([&] { std::this_thread::sleep_for(3s); }),
-                                        std::move(__pipeline)));
-      __producer_done.store(true);
-      __ch.close();  // wake any blocked consumer pop
+                                        std::move(pipeline)));
+      producer_done.store(true);
+      ch.close();  // wake any blocked consumer pop
     }};
 
-  auto [__count] = stdexec::sync_wait(consume(__ch)
+  auto [count] = stdexec::sync_wait(consume(ch)
                                       | stdexec::then(
-                                        [](int __n)
+                                        [](int n)
                                         {
-                                          std::printf("[main] consumer returned %d\n", __n);
-                                          return __n;
+                                          std::printf("[main] consumer returned %d\n", n);
+                                          return n;
                                         }))
                      .value();
-  (void) __count;
+  (void) count;
 
-  __producer_thread.join();
+  producer_thread.join();
 
-  __mutator_stop.store(true);
-  __mutator.join();
+  mutator_stop.store(true);
+  mutator.join();
 
   std::printf("final last_completed_id = %llu\n",
-              static_cast<unsigned long long>(__ctx.last_completed_id()));
+              static_cast<unsigned long long>(ctx.last_completed_id()));
   return 0;
 }
